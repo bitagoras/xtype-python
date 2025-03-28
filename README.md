@@ -51,7 +51,7 @@ The data stored in `xtype-data.bin` has 226 Bytes.
 
 ### Debug Mode
 
-XType provides a debug mode to inspect the binary format:
+xtype provides a debug mode to inspect the binary format:
 
 ```python
 with XTypeFile("xtype-data.bin", 'r') as xf:
@@ -80,10 +80,6 @@ XTypeFile(filename: str, mode: str = 'r')
 - `read(byteorder='auto')`: Read and deserialize data from the file
 - `read_debug(indent_size=2, max_indent_level=10, byteorder='auto', max_binary_bytes=15)`: Read and format data for debugging
 
-
-## License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ## Project Links
 
