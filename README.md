@@ -32,7 +32,7 @@ data = {
         "float": 3.14159265359,
         "large_int": 9223372036854775807  # 2^63 - 1
     },
-    "basic_data_types": [True, False, None, [7, 7.7]],
+    "mixed_data_types": [True, False, None, [7, 7.7]],
     "binary_data": b"Binary data example",
     "array_data": np.array([[[1, 2, 3], [4, 5, 6]]], dtype=np.int32)
 }
