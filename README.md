@@ -1,7 +1,7 @@
 # xtype - Python module
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.1.0-green.svg)](https://github.com/bitagoras/xtype-python)
+[![Version](https://img.shields.io/badge/version-0.2.0-green.svg)](https://github.com/bitagoras/xtype-python)
 
 xtype is a Python library for serializing and deserializing data structures using the [xtype](https://github.com/bitagoras/xtype) binary format, optimized for efficient data exchange and storage.
 
