@@ -8,10 +8,9 @@ Copyright (c) 2025 Bitagoras
 License: MIT
 
 Project: https://github.com/bitagoras/xtype-python
-Version: 0.1.0
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 import struct
 import numpy as np
