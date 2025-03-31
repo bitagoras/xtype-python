@@ -77,7 +77,7 @@ XTypeFile(filename: str, mode: str = 'r')
 
 - `write(data)`: Serialize and write a Python object to the file
 - `read(byteorder='auto')`: Read and deserialize data from the file
-- `read_debug(indent_size=2, max_indent_level=10, byteorder='auto', max_binary_bytes=15)`: Read and format data for debugging
+- `read_debug(indent_size=2, max_indent_level=10, byteorder='auto', max_binary_bytes=15)`: Read and format output for debugging
 
 
 ## Project Links
