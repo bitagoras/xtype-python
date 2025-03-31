@@ -19,7 +19,7 @@ from typing import Any, Dict, List, Tuple, Union, BinaryIO, Iterator, Optional
 
 DEFAULT_BYTE_ORDER = 'big'
 
-class XTypeFile:
+class File:
     """
     A class for reading and writing Python data structures to files using the xtype binary format.
 
@@ -31,7 +31,7 @@ class XTypeFile:
 
     def __init__(self, filename: str, mode: str = 'r'):
         """
-        Initialize an XTypeFile object.
+        Initialize an xtype.File object.
 
         Args:
             filename: Path to the file

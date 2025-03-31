@@ -8,7 +8,7 @@ Python data structures to files and reading raw data from xtype files.
 import numpy as np
 import os
 
-from xtype import XTypeFile
+import xtype
 
 print("XType Format Demo")
 print("=================")
@@ -34,13 +34,13 @@ test_data = {
 
 # Write data to file
 print("\nWriting test data to file...")
-with XTypeFile(test_file, 'w') as xf:
+with xtype.File(test_file, 'w') as xf:
     xf.write(test_data)
 
 print(f"File size: {os.path.getsize(test_file)} bytes")
 
 print("\nReading file in raw debug mode:")
-with XTypeFile(test_file, 'r') as xf:
+with xtype.File(test_file, 'r') as xf:
     for chunk in xf.read_debug():
         print(chunk)
 
@@ -49,7 +49,7 @@ print(test_data)
 
 # Read data back using the new read method
 print("\nReading data using read method:")
-with XTypeFile(test_file, 'r') as xf:
+with xtype.File(test_file, 'r') as xf:
     read_data = xf.read()
 print(read_data)
 

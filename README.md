@@ -20,12 +20,11 @@ xtype is a Python library for serializing and deserializing data structures usin
 ### Basic Usage
 
 ```python
-from xtype import XTypeFile
+import xtype
 import numpy as np
 
 # Sample data with various types
 data = {
-    "version": 1.0,
     "text": ["hello", "world"],
     "numeric_values": {
         "integer": 42,
@@ -38,23 +37,23 @@ data = {
 }
 
 # Write data to file
-with XTypeFile("xtype-data.bin", 'w') as xf:
+with xtype.File("xtype-data.bin", 'w') as xf:
     xf.write(data)
 
 # Read data from file
-with XTypeFile("xtype-data.bin", 'r') as xf:
+with xtype.File("xtype-data.bin", 'r') as xf:
     read_data = xf.read()
     print(read_data)
 ```
 
-The data stored in `xtype-data.bin` has 226 Bytes.
+The data stored in `xtype-data.bin` has 208 Bytes.
 
 ### Debug Mode
 
 xtype provides a debug mode to inspect the binary format:
 
 ```python
-with XTypeFile("xtype-data.bin", 'r') as xf:
+with xtype.File("xtype-data.bin", 'r') as xf:
     for chunk in xf.read_debug():
         print(chunk)
 ```
