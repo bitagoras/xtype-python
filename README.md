@@ -1,4 +1,4 @@
-# xtype - Python module
+# xtype - Python library  <img src="figures/logo_xtype.png" width="50" align="right">
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/version-0.2.0-green.svg)](https://github.com/bitagoras/xtype-python)
@@ -67,7 +67,7 @@ The main class for reading and writing data in XType format.
 #### Constructor
 
 ```python
-XTypeFile(filename: str, mode: str = 'r')
+xtype.File(filename: str, mode: str = 'r')
 ```
 
 - `filename`: Path to the file

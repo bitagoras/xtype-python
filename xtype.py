@@ -110,8 +110,36 @@ class File:
         # Reset the file position to the beginning
         self.file.seek(0)
 
+        # If byteorder is 'auto', try to detect it from the BOM
+        if byteorder == 'auto':
+            self.reader._read_bom()
+
         # Start recursive parsing
         return self.reader.read()
+
+    def __getitem__(self, key):
+        """
+        Access an element within the file.
+
+        Creates an objPointer at the beginning of the file and uses its __getitem__ method.
+
+        Args:
+            key: Index (for lists), key (for dicts), or slice (for arrays)
+
+        Returns:
+            objPointer: A new objPointer pointing to the beginning of the found object
+        """
+        if not self.file or self.file.closed:
+            raise IOError("File is not open for reading")
+
+        if self.mode != 'r':
+            raise IOError("File is not open in read mode")
+
+        # Create an objPointer at the beginning of the file
+        root = objPointer(self, 0)
+
+        # Use the objPointer's __getitem__ method
+        return root[key]
 
     def read_debug(self, indent_size: int = 2, max_indent_level: int = 10, byteorder: str = 'auto', max_binary_bytes: int = 15) -> Iterator[str]:
         """
@@ -125,11 +153,31 @@ class File:
         if self.mode != 'r':
             raise IOError("File is not open in read mode")
 
-        # Reset the file position to the beginning
+        # Reset the file position at the start
         self.file.seek(0)
 
         return self.reader.read_debug(indent_size, max_indent_level, byteorder, max_binary_bytes)
 
+    def keys(self):
+        """
+        Return a list of keys if the root object is a dictionary.
+
+        Returns:
+            list: List of keys from the dictionary
+
+        Raises:
+            TypeError: If the root object is not a dictionary
+            IOError: If the file is not open for reading
+        """
+        if not self.file or self.file.closed:
+            raise IOError("File is not open for reading")
+
+        if self.mode != 'r':
+            raise IOError("File is not open in read mode")
+
+        # Create an objPointer at the beginning of the file
+        ptr = objPointer(self, 0)
+        return ptr.keys()
 
 class XTypeFileWriter:
     """
@@ -474,7 +522,35 @@ class XTypeFileReader:
         # Grammar terminal symbols (single character markers)
         self.grammar_terminals = set('*[]{}TFnijklIJKLbhfdsuSxMNOP0123456789')
 
-    def read(self, byteorder: str = 'auto') -> Any:
+    def _setPos(self, pos: int):
+        """
+        Set the file position to the given value.
+
+        This method is useful for seeking to a specific position in the file
+        and continuing to read from there.
+
+        Args:
+            pos: File position to seek to
+        """
+        self.file.seek(pos)
+        self._pending_binary_size = 0
+
+    def _getPos(self) -> int:
+        """
+        Get the current file position.
+
+        Returns the file position after any pending binary data.
+
+        Returns:
+            int: The current file position
+        """
+        pos = self.file.tell()
+        nRest = self._pending_binary_size
+        if nRest is not None:
+            pos += nRest
+        return pos
+
+    def read(self, byteorder: str = 'auto', pos: int = 0) -> Any:
         """
         Read an xtype file and convert it to a Python object.
 
@@ -484,6 +560,7 @@ class XTypeFileReader:
         Args:
             byteorder: The byte order of multi-byte integers in the file.
                        'big', 'little' or 'auto'. Defaults to 'auto'.
+            pos: File start position for reading
 
         Returns:
             Any: The Python object read from the file
@@ -496,7 +573,8 @@ class XTypeFileReader:
             self.byteorder = byteorder
 
         # Reset the file position to the beginning
-        self.file.seek(0)
+        self.file.seek(pos)
+        self.file._pending_binary_size = 0
 
         # If byteorder is 'auto', try to detect it from the BOM
         if byteorder == 'auto':
@@ -539,7 +617,7 @@ class XTypeFileReader:
             self.byteorder = byteorder
 
         # Reset the file position at the start
-        self.file.seek(0)
+        self._setPos(0)
 
         # Initialize internal state
         indent_level = 0
@@ -672,9 +750,6 @@ class XTypeFileReader:
         if not self.file or self.file.closed:
             raise IOError("File is not open for reading")
 
-        # State tracking for binary data
-        self._pending_binary_size = 0
-
         # Track accumulated length multipliers for arrays
         length_multiplier = 1
 
@@ -758,20 +833,21 @@ class XTypeFileReader:
             # If we get here, we encountered an unexpected character
             raise ValueError(f"Unexpected character in xtype file: {repr(char)}")
 
-    def _read_step(self) -> Tuple[str, List[int], int]:
+    def _read_header(self) -> Tuple[str, List[int], int]:
         """
-        Read a single elementary part from the xtype file.
+        Read a symbol and size information of an element from the xtype file.
 
-        This method reads the xtype file using read_raw and returns elementary parts.
-        The elements could be single symbols ([]{}TFn*), scalar types or array types.
-        The function does not read the binary payload data. This is done by calling
-        _read_raw_data().
+        This method reads the xtype file using read_raw and returns the symbol and size information.
+        The size information is the total size of the binary data associated with the symbol and
+        the dimensions in case of arrays. If the symbol is a grammar symbol without binary data,
+        the size is 0.
 
         Returns:
             Tuple[str, List[int], int]: A tuple containing:
                 - symbol: String representing the type or grammar symbol
+                - size: Total size of the binary data in bytes (0 for grammar
+                        symbols without binary data)
                 - dimensions: List of dimensions (empty for scalar values)
-                - size: Size to be read in bytes (0 for grammar symbols without binary data)
         """
         if not self.file or self.file.closed:
             raise IOError("File is not open for reading")
@@ -783,7 +859,7 @@ class XTypeFileReader:
         for symbol, flag, length_or_size in self._read_raw():
             # Case 1: Grammar terminals (single symbols)
             if symbol in '[]{}TFn*':
-                return symbol, [], 0
+                return symbol, 0, []
 
             # Case 2: Length information (0-9, M, N, O, P)
             elif flag == 1:
@@ -794,10 +870,10 @@ class XTypeFileReader:
             # Case 3: Data types with binary data
             elif flag == 2:
                 # Return the data type with collected dimensions and size
-                return symbol, dimensions, length_or_size
+                return symbol, length_or_size, dimensions
 
         # If we reach here, we've reached the end of the file
-        return '', [], 0
+        return '', 0, []
 
     def _read_object(self) -> Any:
         """
@@ -810,22 +886,22 @@ class XTypeFileReader:
         isFootnote = True
         while isFootnote:
             # Read the next step from the file
-            symbol, dimensions, size = self._read_step()
+            symbol, size, dimensions = self._read_header()
             if symbol == '*':
-                symbol, dimensions, size = self._read_step()
+                symbol, size, dimensions = self._read_header()
             else:
                 isFootnote = False
 
-        return self._read_element(symbol, dimensions, size)
+        return self._read_element(symbol, size, dimensions)
 
-    def _read_element(self, symbol: str, dimensions: List[int], size: int) -> Any:
+    def _read_element(self, symbol: str, size: int, dimensions: List[int]) -> Any:
         """
         Read an element based on its symbol from the file.
 
         Args:
             symbol: The symbol or type code read from the file
-            dimensions: List of dimensions for array types (empty for scalar values)
             size: The size of binary data in bytes (0 for grammar symbols)
+            dimensions: List of dimensions for array types (empty for scalar values)
 
         Returns:
             The Python object read from the file
@@ -852,15 +928,15 @@ class XTypeFileReader:
                 # This is an array type
                 return self._read_numpy_array(dimensions, symbol, size)
             else:
-                # This is a single element
-                return self._read_single_element(symbol, size)
+                # This is a basic element (scalar or string)
+                return self._read_basic_element(symbol, size)
         else:
             # Unexpected symbol
             raise ValueError(f"Unexpected symbol in xtype file: {symbol}")
 
-    def _read_single_element(self, type_code: str, size: int) -> Any:
+    def _read_basic_element(self, type_code: str, size: int) -> Any:
         """
-        Read a basic element from the file.
+        Read a basic element from the file (scalar or string).
 
         Args:
             type_code: The xtype type code
@@ -915,7 +991,7 @@ class XTypeFileReader:
 
         # Parse each element until we hit a closing bracket
         while True:
-            symbol, dimensions, size = self._read_step()
+            symbol, size, dimensions = self._read_header()
 
             if symbol == ']':
                 # End of list
@@ -927,10 +1003,10 @@ class XTypeFileReader:
                     result.append(self._read_numpy_array(dimensions, symbol, size))
                 else:
                     # Basic element
-                    result.append(self._read_single_element(symbol, size))
+                    result.append(self._read_basic_element(symbol, size))
             else:
                 # Special symbol or container
-                result.append(self._read_element(symbol, dimensions, size))
+                result.append(self._read_element(symbol, size, dimensions))
 
         return result
 
@@ -946,7 +1022,7 @@ class XTypeFileReader:
         # Parse key-value pairs until we hit a closing brace
         while True:
             # Read the key
-            symbol, dimensions, size = self._read_step()
+            symbol, size, dimensions = self._read_header()
 
             if symbol == '}':
                 # End of dictionary
@@ -968,7 +1044,7 @@ class XTypeFileReader:
                     key = self._convert_to_deep_tuple(intArray.tolist())
                 else:
                     # Int element
-                    key = int(self._read_single_element(symbol, size))
+                    key = int(self._read_basic_element(symbol, size))
             elif symbol in 'hfd':
                 if dimensions:
                     # Float array type
@@ -976,13 +1052,13 @@ class XTypeFileReader:
                     key = self._convert_to_deep_tuple(intArray.tolist())
                 else:
                     # Float element
-                    key = float(self._read_single_element(symbol, size))
+                    key = float(self._read_basic_element(symbol, size))
             else:
                 # Unexpected symbol for key
                 raise ValueError(f"Unexpected key type in dictionary: {symbol}")
 
             # Read the value
-            symbol, dimensions, size = self._read_step()
+            symbol, size, dimensions = self._read_header()
 
             # We're reading a value
             if symbol in self.type_sizes:
@@ -992,10 +1068,10 @@ class XTypeFileReader:
                     result[key] = self._read_numpy_array(dimensions, symbol, size)
                 else:
                     # Basic element
-                    result[key] = self._read_single_element(symbol, size)
+                    result[key] = self._read_basic_element(symbol, size)
             else:
                 # Special symbol or container
-                result[key] = self._read_element(symbol, dimensions, size)
+                result[key] = self._read_element(symbol, size, dimensions)
 
         return result
 
@@ -1184,4 +1260,205 @@ class XTypeFileReader:
                 pass  # Keep the default byteorder
         else:
             # Reset the file position to the beginning
-            self.file.seek(current_pos)
+            self._setPos(current_pos)
+
+
+class objPointer:
+    """
+    A class that represents an object of the xtype format with a pointer to a specific position in the file.
+
+    This class allows for efficient navigation of xtype data structures without loading the entire object
+    into memory, by tracking file positions and navigating directly to the relevant parts of the file.
+    """
+
+    def __init__(self, file: File, position: int):
+        """
+        Initialize an objPointer.
+
+        Args:
+            file: The xtype.File object
+            position: The position in the file where the object starts
+        """
+        self.file = file
+        self.reader = file.reader
+        self.writer = file.writer
+
+        self.position = position
+        self.footnotes = []
+
+        # Move file pointer to the specified position
+        self.file.file.seek(self.position)
+        self.file._pending_binary_size = 0
+
+    def _skip_object(self):
+        """
+        Skip over an object in the file.
+
+        Handles footnotes and correctly counts opening and closing brackets/braces
+        to ensure proper balance is maintained.
+        """
+        nestedCount = None
+        while nestedCount != 0:
+            if nestedCount is None:
+                nestedCount = 0
+            symbol, size, dimensions = self.reader._read_header()
+            if symbol == '*':
+                # Skip over footnote content
+                self._skip_object()
+            elif symbol in '[{':
+                nestedCount += 1
+            elif symbol in ']}':
+                nestedCount -= 1
+            elif nestedCount == 0:
+                break
+
+    def __getitem__(self, item):
+        """
+        Access a sub-element within the object.
+
+        Args:
+            item: Index (for lists), key (for dicts), or slice (for arrays)
+
+        Returns:
+            objPointer: A new objPointer pointing to the found object
+
+        Raises:
+            IndexError: If the item is not found in the object
+            TypeError: If the object does not support indexing
+        """
+        # Store current position to restore it later if needed
+        # current_pos = self.file.file.tell()
+        self.reader._setPos(self.position)
+
+        # Re-read the object type and handle footnotes
+        is_footnote = True
+        while is_footnote:
+            symbol, size, dimensions = self.reader._read_header()
+            if symbol == '*':
+                # Skip over footnote without reading its content
+                self.reader._read_object()
+            else:
+                is_footnote = False
+
+        # Handle based on object type
+        if symbol == '[':
+            # Object is a list
+            if not isinstance(item, int):
+                raise TypeError(f"List indices must be integers, got {type(item)}")
+
+            # Read and skip objects until we reach the specified index
+            index = 0
+            while index < item:
+                self._skip_object()
+                index += 1
+
+            # Create a new objPointer at the current position
+            return objPointer(self.file, self.reader._getPos())
+
+        elif symbol == '{':
+            # Object is a dictionary
+            # Read each key and check if it matches
+            while True:
+                key_symbol, key_size, key_dimensions = self.reader._read_header()
+
+                # Check if we've reached the end of the dictionary
+                if key_symbol == '}':
+                    # self.file.file.seek(current_pos)  # Restore original position
+                    raise KeyError(f"Key {item} not found in dictionary")
+
+                # Read the key and compare
+                key = self.reader._read_element(key_symbol, key_size, key_dimensions)
+                if isinstance(key, list):
+                    key = self.reader._convert_to_deep_tuple(key)
+
+                if key == item:
+                    # Key found, return a new objPointer for the value
+                    return objPointer(self.file, self.reader._getPos())
+                else:
+                    # Skip the value and continue searching
+                    self._skip_object()
+
+        elif dimensions:
+            # Object is an array - return None as specified
+            # self.file.file.seek(current_pos)  # Restore original position
+            return None
+
+        else:
+            # Object is a singular type (int, float, str, etc.)
+            # self.file.file.seek(current_pos)  # Restore original position
+            raise TypeError(f"Object of type '{symbol}' does not support indexing")
+
+    def keys(self):
+        """
+        Return a list of keys from a dictionary object.
+
+        Returns:
+            list: List of keys from the dictionary
+
+        Raises:
+            TypeError: If the object is not a dictionary
+        """
+        # Store current position
+        current_pos = self.reader._getPos()
+
+        # Move to the position of this object
+        self.reader._setPos(self.position)
+
+        # Re-read the object type and handle footnotes
+        is_footnote = True
+        while is_footnote:
+            symbol, size, dimensions = self.reader._read_header()
+            if symbol == '*':
+                # Skip over footnote without reading its content
+                self.reader._read_object()
+            else:
+                is_footnote = False
+
+        # Check if object is a dictionary
+        if symbol != '{':
+            self.reader._setPos(current_pos)
+            raise TypeError(f"Object of type '{symbol}' is not a dictionary")
+
+        # Read keys while skipping values
+        keys = []
+        while True:
+            key_symbol, key_size, key_dimensions = self.reader._read_header()
+
+            # Check if we've reached the end of the dictionary
+            if key_symbol == '}':
+                break
+
+            # Read the key
+            key = self.reader._read_element(key_symbol, key_size, key_dimensions)
+            if isinstance(key, list):
+                key = self.reader._convert_to_deep_tuple(key)
+
+            keys.append(key)
+            # Skip the value
+            self._skip_object()
+
+        # Restore original position
+        self.reader._setPos(current_pos)
+        return keys
+
+    def __call__(self):
+        """
+        Convert the entire object to a Python object.
+
+        Returns:
+            Any: The Python object read from the file
+        """
+        # Save current position
+        current_pos = self.reader._getPos()
+
+        # Move to the position of this object
+        self.reader._setPos(self.position)
+
+        # Read the object
+        result = self.reader._read_object()
+
+        # Restore original position
+        self.reader._setPos(current_pos)
+
+        return result
+

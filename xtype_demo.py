@@ -54,3 +54,57 @@ with xtype.File(test_file, 'r') as xf:
 print(read_data)
 
 print("\nDemo completed successfully!")
+
+# Demonstrate the new objPointer functionality
+print("\n\nObjPointer Feature Demo")
+print("======================")
+
+with xtype.File(test_file, 'r') as xf:
+    print("\n0. Show dictionary keys:")
+    print(xf.keys())
+
+    print("\n1. Access dictionary values by key:")
+    # Get a specific dictionary key using __getitem__
+    text_value = xf["text"]()  # Call to convert to Python object
+    print(f"Text value: {text_value}")
+
+    print("\n2. Access nested dictionary values:")
+    print("get whole subitem:")
+    integer_value = xf["numeric_values"]()
+    print(integer_value)
+    # Navigate through nested structures
+    print("get sub-subitem")
+    integer_value = xf["numeric_values"]["integer"]()
+    print(f"Integer value: {integer_value}")
+    float_value = xf["numeric_values"]["float"]()
+    print(f"Float value: {float_value}")
+
+    print("\n3. Access list elements by index:")
+    # Get specific list elements
+    hello_value = xf["text"][0]()
+    print(f"First text item: {hello_value}")
+    world_value = xf["text"][1]()
+    print(f"Second text item: {world_value}")
+
+    # print("\n4. Access elements in arrays:")
+    # # Access array elements
+    # first_float = xf["float_array"][0]()
+    # print(f"First float in array: {first_float}")
+
+    # # Access 2D array elements (using chained __getitem__ calls)
+    # nested_value = xf["2d_array"][0][0][1]()
+    # print(f"Value at [0][0][1] in 2D array: {nested_value}")
+
+    # print("\n5. Navigate complex nested structures:")
+    # # Chain multiple navigation steps
+    # nested_list_item = xf["basic_data_types"][3][1]()
+    # print(f"Nested list item at basic_data_types[3][1]: {nested_list_item}")
+
+    # print("\n6. Demonstrate performance benefit for large structures:")
+    # # Only convert the part of the structure we need
+    # print("Converting only specific parts of the data structure:")
+    # specific_array = xf["2d_array"]()
+    # print(f"2D array: {specific_array}")
+
+    # # For comparison (already did this earlier with full read)
+    # print("\nObjPointer feature demo completed successfully!")
