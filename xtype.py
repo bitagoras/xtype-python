@@ -3,6 +3,15 @@ xtype - Universal Binary Notation Language for Data Exchange
 
 A Python implementation for serializing and deserializing data structures
 using the xtype binary format, optimized for efficient data exchange and storage.
+This library provides a compact, efficient binary format for representing
+complex data structures including nested containers and multi-dimensional arrays.
+
+Features:
+- Serialization of basic types (int, float, str, bytes, bool)
+- Support for container types (list, dict)
+- Efficient handling of NumPy arrays (1D, 2D, and higher-dimensional)
+- Memory-efficient partial loading via object pointers
+- Compact binary representation
 
 Copyright (c) 2025 Bitagoras
 License: MIT
@@ -14,9 +23,95 @@ __version__ = "0.2.0"
 
 import struct
 import numpy as np
-from typing import Any, Dict, List, Tuple, Union, BinaryIO, Iterator, Optional
+from typing import Any, Dict, List, Tuple, Union, BinaryIO, Iterator, Optional, Callable
+import itertools
 
 DEFAULT_BYTE_ORDER = 'big'
+
+# Size in bytes for each xtype type code
+# This mapping is used to calculate memory requirements and array offsets
+TYPE_SIZES = {
+    # Signed integers (1, 2, 4, 8 bytes)
+    'i': 1, 'j': 2, 'k': 4, 'l': 8,
+    # Unsigned integers (1, 2, 4, 8 bytes)
+    'I': 1, 'J': 2, 'K': 4, 'L': 8,
+    # Boolean (1 byte)
+    'b': 1,
+    # Floating point (2, 4, 8 bytes for float16, float32, float64)
+    'h': 2, 'f': 4, 'd': 8,
+    # String encodings
+    's': 1,  # UTF-8 string (variable bytes per character)
+    'u': 2,  # UTF-16 string (2 bytes per character)
+    # Other types
+    'S': 1,  # Struct type as array of bytes
+    'x': 1,  # Generic byte array
+}
+
+# Type mapping between Python/NumPy types and xtype format type codes
+# Used during serialization to determine the appropriate type code for each value
+TYPE_MAP = {
+    # Python native type mappings
+    bool: 'b',    # Boolean to xtype boolean
+    int: 'k',     # Python int defaults to 32-bit integer
+    float: 'd',   # Python float defaults to 64-bit double
+    str: 's',     # Python string to UTF-8 encoded string
+    bytes: 'x',   # Python bytes to raw byte array
+
+    # NumPy specific type mappings for precise control
+    np.dtype('bool'): 'b',    # Boolean
+    np.dtype('int8'): 'i',    # 8-bit signed integer
+    np.dtype('int16'): 'j',   # 16-bit signed integer
+    np.dtype('int32'): 'k',   # 32-bit signed integer
+    np.dtype('int64'): 'l',   # 64-bit signed integer
+    np.dtype('uint8'): 'I',   # 8-bit unsigned integer
+    np.dtype('uint16'): 'J',  # 16-bit unsigned integer
+    np.dtype('uint32'): 'K',  # 32-bit unsigned integer
+    np.dtype('uint64'): 'L',  # 64-bit unsigned integer
+    np.dtype('float16'): 'h', # 16-bit half-precision float
+    np.dtype('float32'): 'f', # 32-bit single-precision float
+    np.dtype('float64'): 'd'  # 64-bit double-precision float
+}
+
+# Map xtype type codes to NumPy dtypes
+# Used during deserialization to convert binary data to appropriate NumPy types
+DTYPE_MAP = {
+    'b': np.bool_,     # Boolean
+    'i': np.int8,      # 8-bit signed integer
+    'j': np.int16,     # 16-bit signed integer
+    'k': np.int32,     # 32-bit signed integer
+    'l': np.int64,     # 64-bit signed integer
+    'I': np.uint8,     # 8-bit unsigned integer
+    'x': np.uint8,     # Raw bytes are treated as 8-bit unsigned integers
+    'J': np.uint16,    # 16-bit unsigned integer
+    'K': np.uint32,    # 32-bit unsigned integer
+    'L': np.uint64,    # 64-bit unsigned integer
+    'h': np.float16,   # 16-bit half-precision float
+    'f': np.float32,   # 32-bit single-precision float
+    'd': np.float64    # 64-bit double-precision float
+}
+
+# Grammar of xtype format
+# This formal grammar defines the structure of the xtype binary format
+# and is used to guide the parser implementation.
+
+# <file>       ::= <EOF> | <object> <EOF>
+# <object>     ::= <content> | <footnote> <content>
+# <footnote>   ::= "*" <content> | "*" <content> <footnote>
+# <content>    ::= <element> | <list> | <dict>
+# <list>       ::= "[]" | "[" <list_items> "]" | "[" <EOF> | "[" <list_items> <EOF>
+# <list_items> ::= <object> | <object> <list_items>
+# <dict>       ::= "{}" | "{" <dict_items> "}" | "{" <EOF> | "{" <list_items> <EOF>
+# <dict_items> ::= <element> <object> | <element> <object> <dict_items>
+# <element>    ::= <type> <bin_data> | "T"  | "F" | "n"
+# <type>       ::= <lenght> <type> | <bin_data>
+# <lenght>     ::= "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" |
+#                  "M" <bin_data> | "N" <bin_data> | "O" <bin_data> | "P" <bin_data>
+# <bin_type>   ::= "i" | "j" | "k" | "l" | "I" | "J" | "K" | "L" |
+#                  "b" | "h" | "f" | "d" | "s" | "u" | "S" | "x"
+
+# <bin_data> represents the actual binary data of the specified size for the given type.
+# <EOF> marks the end of file. In streaming applications, this could be represented by a zero byte.
+
 
 class File:
     """
@@ -206,28 +301,7 @@ class XTypeFileWriter:
             self.byteorder = byteorder
 
         # Type mapping between Python/NumPy types and xtype format types
-        self.type_map = {
-            # Python -> xtype type mappings
-            bool: 'b',
-            int: self._select_int_type,  # Function to select appropriate int type
-            float: 'd',
-            str: 's',
-            bytes: 'x',
-
-            # NumPy -> xtype type mappings
-            np.dtype('bool'): 'b',
-            np.dtype('int8'): 'i',
-            np.dtype('int16'): 'j',
-            np.dtype('int32'): 'k',
-            np.dtype('int64'): 'l',
-            np.dtype('uint8'): 'I',
-            np.dtype('uint16'): 'J',
-            np.dtype('uint32'): 'K',
-            np.dtype('uint64'): 'L',
-            np.dtype('float16'): 'h',
-            np.dtype('float32'): 'f',
-            np.dtype('float64'): 'd',
-        }
+        self.type_map = TYPE_MAP
 
     def _write_bom(self):
         """
@@ -500,27 +574,10 @@ class XTypeFileReader:
 
         Args:
             file: The file object to read from
-            type_sizes: Dictionary mapping type codes to their sizes in bytes
-            grammar_terminals: Set of grammar terminal symbols
         """
         self.file = file
         self._pending_binary_size = 0
         self._pending_binary_type = None
-
-        # Size in bytes for each type
-        self.type_sizes = {
-            'i': 1, 'j': 2, 'k': 4, 'l': 8,  # signed ints
-            'I': 1, 'J': 2, 'K': 4, 'L': 8,  # unsigned ints
-            'b': 1,  # boolean
-            'h': 2, 'f': 4, 'd': 8,  # floating point
-            's': 1,  # string (utf-8)
-            'u': 2,  # utf-16
-            'S': 1,  # struct type as array of bytes
-            'x': 1,  # other byte array
-        }
-
-        # Grammar terminal symbols (single character markers)
-        self.grammar_terminals = set('*[]{}TFnijklIJKLbhfdsuSxMNOP0123456789')
 
     def _setPos(self, pos: int):
         """
@@ -815,9 +872,9 @@ class XTypeFileReader:
                 continue
 
             # Handle data types
-            if char in self.type_sizes:
+            if char in TYPE_SIZES:
                 # For actual data types, calculate the total data size
-                type_size = self.type_sizes[char]
+                type_size = TYPE_SIZES[char]
 
                 # Calculate total size based on accumulated length multiplier
                 total_size = type_size * length_multiplier
@@ -922,7 +979,7 @@ class XTypeFileReader:
         elif symbol == 'n':
             # None
             return None
-        elif symbol in self.type_sizes:
+        elif symbol in TYPE_SIZES:
             # Check if this is an array type or a single element
             if dimensions:
                 # This is an array type
@@ -996,7 +1053,7 @@ class XTypeFileReader:
             if symbol == ']':
                 # End of list
                 break
-            elif symbol in self.type_sizes:
+            elif symbol in TYPE_SIZES:
                 # Data type
                 if dimensions:
                     # Array type
@@ -1061,7 +1118,7 @@ class XTypeFileReader:
             symbol, size, dimensions = self._read_header()
 
             # We're reading a value
-            if symbol in self.type_sizes:
+            if symbol in TYPE_SIZES:
                 # Data type
                 if dimensions and (symbol not in 'sx' or len(dimensions) > 1):
                     # Array type
@@ -1125,28 +1182,11 @@ class XTypeFileReader:
 
                 return string_array.reshape(array_dims)
 
-        # Map xtype type codes to NumPy dtypes
-        dtype_map = {
-            'b': np.bool_,
-            'i': np.int8,
-            'j': np.int16,
-            'k': np.int32,
-            'l': np.int64,
-            'I': np.uint8,
-            'x': np.uint8,
-            'J': np.uint16,
-            'K': np.uint32,
-            'L': np.uint64,
-            'h': np.float16,
-            'f': np.float32,
-            'd': np.float64
-        }
-
         # Get the NumPy dtype
-        if type_code not in dtype_map:
+        if type_code not in DTYPE_MAP:
             raise ValueError(f"Unsupported NumPy type: {type_code}")
 
-        dtype = dtype_map[type_code]
+        dtype = DTYPE_MAP[type_code]
 
         # Calculate total number of elements
         total_elements = 1
@@ -1314,20 +1354,30 @@ class objPointer:
 
     def __getitem__(self, item):
         """
-        Access a sub-element within the object.
+        Access a sub-element within the object using indexing operations.
+
+        This method provides flexible indexing for different data structures:
+        - For lists: Uses integer indices to access elements by position
+        - For dictionaries: Uses keys to access elements by key lookup
+        - For arrays: Supports both direct element access and sub-array slicing
+          with multi-dimensional indexing capabilities
 
         Args:
-            item: Index (for lists), key (for dicts), or slice (for arrays)
+            item: The index specifier, which can be:
+                - Integer index (for lists and arrays)
+                - Dictionary key (for dictionaries)
+                - Tuple of indices (for multi-dimensional arrays)
 
         Returns:
-            objPointer: A new objPointer pointing to the found object
+            For lists and dictionaries: An objPointer pointing to the found object
+            For arrays: The actual array data (NumPy array) or scalar value
 
         Raises:
-            IndexError: If the item is not found in the object
-            TypeError: If the object does not support indexing
+            IndexError: If the index is out of bounds or the item is not found
+            TypeError: If the object does not support the requested indexing operation
+            ValueError: If an unsupported array type is encountered
         """
         # Store current position to restore it later if needed
-        # current_pos = self.file.file.tell()
         self.reader._setPos(self.position)
 
         # Re-read the object type and handle footnotes
@@ -1342,50 +1392,143 @@ class objPointer:
 
         # Handle based on object type
         if symbol == '[':
-            # Object is a list
+            # Object is a list - handle integer indexing
             if not isinstance(item, int):
                 raise TypeError(f"List indices must be integers, got {type(item)}")
 
-            # Read and skip objects until we reach the specified index
+            # Sequential access: read and skip objects until we reach the specified index
+            # Note: This is O(n) access as we must traverse the list sequentially
             index = 0
             while index < item:
                 self._skip_object()
                 index += 1
 
-            # Create a new objPointer at the current position
+            # Create a new objPointer at the current position (pointing to the target element)
             return objPointer(self.file, self.reader._getPos())
 
         elif symbol == '{':
-            # Object is a dictionary
-            # Read each key and check if it matches
+            # Object is a dictionary - handle key-based lookup
+            # Sequential scan through dictionary entries until we find the matching key
             while True:
                 key_symbol, key_size, key_dimensions = self.reader._read_header()
 
-                # Check if we've reached the end of the dictionary
+                # Check if we've reached the end of the dictionary without finding the key
                 if key_symbol == '}':
-                    # self.file.file.seek(current_pos)  # Restore original position
                     raise KeyError(f"Key {item} not found in dictionary")
 
-                # Read the key and compare
+                # Read the key and convert lists to tuples if needed (for hashability)
                 key = self.reader._read_element(key_symbol, key_size, key_dimensions)
                 if isinstance(key, list):
                     key = self.reader._convert_to_deep_tuple(key)
 
                 if key == item:
-                    # Key found, return a new objPointer for the value
+                    # Key found, return a new objPointer for the associated value
                     return objPointer(self.file, self.reader._getPos())
                 else:
-                    # Skip the value and continue searching
+                    # Key doesn't match, skip the value and continue to next key-value pair
                     self._skip_object()
 
         elif dimensions:
-            # Object is an array - return None as specified
-            # self.file.file.seek(current_pos)  # Restore original position
-            return None
+            # Object is an array - handle direct binary reading with efficient random access
+            # This provides O(1) access to array elements regardless of position
 
+            # Get element type information
+            element_type = symbol  # The type code for array elements (i, f, d, etc.)
+            element_size = TYPE_SIZES[element_type]  # Size in bytes for each element
+            data_start_pos = self.file.file.tell()  # Position where the actual array data begins
+
+            # Map the xtype type code to the corresponding NumPy dtype
+            if element_type not in DTYPE_MAP:
+                raise ValueError(f"Unsupported NumPy type: {element_type}")
+
+            dtype = DTYPE_MAP[element_type]
+
+            # Normalize indexing to handle both single indices and tuples consistently
+            if not isinstance(item, tuple):
+                indices = (item,)  # Convert single index to a 1-tuple
+            else:
+                indices = item     # Use the tuple as is
+
+            # Validate that we don't have more indices than dimensions
+            if len(indices) > len(dimensions):
+                raise IndexError(f"Too many indices for array with shape {dimensions}")
+
+            # Determine if byte swapping is needed based on endianness differences
+            # between the file's byte order and the system's native byte order
+            need_byteswap = (self.reader.byteorder == 'big') != (np.dtype(dtype).byteorder == '>')
+
+            # Handle array indexing based on dimensions and provided indices
+
+            # Case 1: Complete indexing - accessing a single element (scalar value)
+            # When the number of indices matches the number of dimensions, we're accessing a single value
+            if len(indices) == len(dimensions):
+                # Calculate memory offset for the target element using multi-dimensional indexing formula
+                # offset = i₁ × (s₂ × s₃ × ... × sₙ) + i₂ × (s₃ × ... × sₙ) + ... + iₙ₋₁ × sₙ + iₙ
+                # where i is the index and s is the dimension size
+                offset = 0
+                for i, idx in enumerate(indices):
+                    # Calculate stride (element spacing) for this dimension
+                    stride = element_size  # Start with basic element size
+                    for dim in dimensions[i+1:]:  # Multiply by all subsequent dimension sizes
+                        stride *= dim
+                    offset += idx * stride  # Add this dimension's contribution to the offset
+
+                # Seek to the exact byte position of the target element
+                self.file.file.seek(data_start_pos + offset)
+                # Read exactly one element's worth of binary data
+                buffer = self.file.file.read(element_size)
+
+                # Convert binary data to a NumPy array containing a single element
+                single_element = np.frombuffer(buffer, dtype=dtype, count=1)
+
+                # Handle endianness differences if needed
+                if need_byteswap:
+                    single_element = single_element.byteswap()
+
+                # Extract the scalar value from the NumPy array
+                result = single_element[0].item()
+
+            # Case 2: Partial indexing - accessing a sub-array (slice of the array)
+            # When fewer indices than dimensions are provided, we're extracting a sub-array
+            else:
+                # Calculate the shape of the resulting sub-array (remaining dimensions)
+                result_shape = dimensions[len(indices):]  # Take dimensions that weren't indexed
+
+                # Calculate the total number of elements in the sub-array
+                total_elements = 1
+                for dim in result_shape:
+                    total_elements *= dim
+
+                # Calculate the base offset to the start of the sub-array
+                # This is similar to the scalar case, but only for the provided indices
+                offset = 0
+                for i, idx in enumerate(indices):
+                    # Calculate stride for this dimension
+                    stride = element_size
+                    for dim in dimensions[i+1:]:
+                        stride *= dim
+                    offset += idx * stride
+
+                # Read the entire sub-array as a contiguous block of memory
+                # This is more efficient than reading elements individually
+                self.file.file.seek(data_start_pos + offset)
+                buffer = self.file.file.read(total_elements * element_size)
+
+                # Convert the binary data to a NumPy array with the appropriate type
+                result = np.frombuffer(buffer, dtype=dtype)
+
+                # Reshape to match the sub-array dimensions
+                if result_shape:
+                    result = result.reshape(result_shape)
+
+                # Handle endianness differences if needed
+                if need_byteswap:
+                    result = result.byteswap()
+
+            return result
         else:
-            # Object is a singular type (int, float, str, etc.)
-            # self.file.file.seek(current_pos)  # Restore original position
+            # Object is a singular type (int, float, str, etc.) which doesn't support indexing
+            # This includes primitive types like integers, floats, strings, etc.
             raise TypeError(f"Object of type '{symbol}' does not support indexing")
 
     def keys(self):
@@ -1461,4 +1604,3 @@ class objPointer:
         self.reader._setPos(current_pos)
 
         return result
-
