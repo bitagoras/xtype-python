@@ -19,7 +19,7 @@ License: MIT
 Project: https://github.com/bitagoras/xtype-python
 """
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 import struct
 import numpy as np
@@ -273,6 +273,27 @@ class File:
         # Create an objPointer at the beginning of the file
         ptr = objPointer(self, 0)
         return ptr.keys()
+        
+    def __len__(self):
+        """
+        Return the length of the root object if it is a list or dictionary.
+        
+        Returns:
+            int: Number of items in the list or dictionary
+            
+        Raises:
+            TypeError: If the root object is neither a list nor a dictionary
+            IOError: If the file is not open for reading
+        """
+        if not self.file or self.file.closed:
+            raise IOError("File is not open for reading")
+            
+        if self.mode != 'r':
+            raise IOError("File is not open in read mode")
+            
+        # Create an objPointer at the beginning of the file
+        ptr = objPointer(self, 0)
+        return len(ptr)
 
 class XTypeFileWriter:
     """
@@ -1330,6 +1351,144 @@ class objPointer:
         self.file.file.seek(self.position)
         self.file._pending_binary_size = 0
 
+    def __call__(self):
+        """
+        Convert the entire object to a Python object.
+
+        Returns:
+            Any: The Python object read from the file
+        """
+        # Save current position
+        current_pos = self.reader._getPos()
+
+        # Move to the position of this object
+        self.reader._setPos(self.position)
+
+        # Read the object
+        result = self.reader._read_object()
+
+        # Restore original position
+        self.reader._setPos(current_pos)
+
+        return result
+
+    def keys(self):
+        """
+        Return a list of keys from a dictionary object.
+
+        Returns:
+            list: List of keys from the dictionary
+
+        Raises:
+            TypeError: If the object is not a dictionary
+        """
+        # Store current position
+        current_pos = self.reader._getPos()
+
+        # Move to the position of this object
+        self.reader._setPos(self.position)
+
+        # Re-read the object type and handle footnotes
+        is_footnote = True
+        while is_footnote:
+            symbol, size, dimensions = self.reader._read_header()
+            if symbol == '*':
+                # Skip over footnote without reading its content
+                self.reader._read_object()
+            else:
+                is_footnote = False
+
+        # Check if object is a dictionary
+        if symbol != '{':
+            self.reader._setPos(current_pos)
+            raise TypeError(f"Object of type '{symbol}' is not a dictionary")
+
+        # Read keys while skipping values
+        keys = []
+        while True:
+            key_symbol, key_size, key_dimensions = self.reader._read_header()
+
+            # Check if we've reached the end of the dictionary
+            if key_symbol == '}':
+                break
+
+            # Read the key
+            key = self.reader._read_element(key_symbol, key_size, key_dimensions)
+            if isinstance(key, list):
+                key = self.reader._convert_to_deep_tuple(key)
+
+            keys.append(key)
+            # Skip the value
+            self._skip_object()
+
+        # Restore original position
+        self.reader._setPos(current_pos)
+        return keys
+        
+    def __len__(self):
+        """
+        Return the length of a list, dictionary, or array object.
+        
+        Returns:
+            int: Number of items in the list, dictionary, or the first dimension of an array
+            
+        Raises:
+            TypeError: If the object does not support length operations
+        """
+        # Store current position
+        current_pos = self.reader._getPos()
+        
+        # Move to the position of this object
+        self.reader._setPos(self.position)
+        
+        # Re-read the object type and handle footnotes
+        is_footnote = True
+        while is_footnote:
+            symbol, size, dimensions = self.reader._read_header()
+            if symbol == '*':
+                # Skip over footnote without reading its content
+                self.reader._read_object()
+            else:
+                is_footnote = False
+        
+        # Check if object is a list or dictionary
+        if symbol == '{':
+            # For dictionaries, use the keys method to get the length
+            self.reader._setPos(current_pos)
+            return len(self.keys())
+        elif symbol == '[':
+            # For lists, count the number of items
+            count = 0
+            
+            # Read items until end of list or EOF
+            try:
+                while True:
+                    item_symbol, item_size, item_dimensions = self.reader._read_header()
+                    
+                    # Check if we've reached the end of the list
+                    if item_symbol == ']':
+                        break
+                    
+                    # Skip the item and increment the counter
+                    self._skip_object()
+                    count += 1
+            except EOFError:
+                # Handle case where EOF closes the list
+                pass
+            
+            # Restore original position
+            self.reader._setPos(current_pos)
+            return count
+        # Handle arrays (non-container types with dimensions)
+        elif dimensions and len(dimensions) > 0:
+            # For arrays, return the first dimension size
+            self.reader._setPos(current_pos)
+            return dimensions[0]
+        else:
+            # Not a list, dictionary, or array
+            self.reader._setPos(current_pos)
+            raise TypeError(f"Object of type '{symbol}' does not support len()")
+
     def _skip_object(self):
         """
         Skip over an object in the file.
@@ -1392,19 +1551,94 @@ class objPointer:
 
         # Handle based on object type
         if symbol == '[':
-            # Object is a list - handle integer indexing
-            if not isinstance(item, int):
-                raise TypeError(f"List indices must be integers, got {type(item)}")
+            # Handle list indexing - both integer and slice access
+            if isinstance(item, int):
+                # Integer indexing - handle as before
+                # Sequential access: read and skip objects until we reach the specified index
+                # Note: This is O(n) access as we must traverse the list sequentially
+                index = 0
+                while index < item:
+                    self._skip_object()
+                    index += 1
 
-            # Sequential access: read and skip objects until we reach the specified index
-            # Note: This is O(n) access as we must traverse the list sequentially
-            index = 0
-            while index < item:
-                self._skip_object()
-                index += 1
+                # Create a new objPointer at the current position (pointing to the target element)
+                return objPointer(self.file, self.reader._getPos())
 
-            # Create a new objPointer at the current position (pointing to the target element)
-            return objPointer(self.file, self.reader._getPos())
+            elif isinstance(item, slice):
+                # Slice indexing - handle start, stop, step
+                start = 0 if item.start is None else item.start
+                stop = float('inf') if item.stop is None else item.stop
+                step = 1 if item.step is None else item.step
+
+                # Handle negative step sizes by transforming to positive and reversing at the end
+                negative_step = False
+                if step < 0:
+                    # For negative step, we need to reverse direction
+                    negative_step = True
+                    # Swap and negate for processing with positive step
+                    start, stop = (stop - 1 if stop is not None else size - 1), (start - 1 if start is not None else -1)
+                    step = -step
+                elif step == 0:
+                    raise ValueError("Step size cannot be zero")
+
+                # Create the list to store our results
+                result = []
+
+                # Reset to start position and read the list header again
+                self.reader._setPos(self.position)
+                symbol, size, dimensions = self.reader._read_header()
+
+                # Skip to start position
+                index = 0
+                while index < start:
+                    self._skip_object()
+                    index += 1
+
+                # Read objects at positions that fall within the slice
+                while index < stop:
+                    # Store the current position to check if we've reached the end of the list
+                    current_pos = self.reader._getPos()
+
+                    # Try to read the next object's header to see if we're at the end of the list
+                    # We need to look ahead without advancing the cursor permanently
+                    try:
+                        next_symbol, _, _ = self.reader._read_header()
+                        # If we see ']', we've reached the end of the list
+                        if next_symbol == ']':
+                            break
+                        # Go back to where we were before the peek
+                        self.reader._setPos(current_pos)
+                    except:
+                        # Error reading ahead, assume we're at the end
+                        break
+
+                    # Read the object and add it to our results
+                    value = self.reader._read_object()
+                    result.append(value)
+
+                    # Skip (step-1) objects to get to the next desired position
+                    for _ in range(step - 1):
+                        try:
+                            # Check if we're at the end before skipping
+                            peek_pos = self.reader._getPos()
+                            peek_symbol, _, _ = self.reader._read_header()
+                            if peek_symbol == ']':
+                                break
+                            self.reader._setPos(peek_pos)
+                            self._skip_object()
+                        except:
+                            # Error skipping ahead, we've reached the end
+                            break
+
+                    index += step
+
+                # If we had a negative step, reverse the result
+                if negative_step:
+                    result.reverse()
+                return result
+
+            else:
+                raise TypeError(f"List indices must be integers or slices, got {type(item)}")
 
         elif symbol == '{':
             # Object is a dictionary - handle key-based lookup
@@ -1459,69 +1693,289 @@ class objPointer:
 
             # Handle array indexing based on dimensions and provided indices
 
-            # Case 1: Complete indexing - accessing a single element (scalar value)
-            # When the number of indices matches the number of dimensions, we're accessing a single value
-            if len(indices) == len(dimensions):
-                # Calculate memory offset for the target element using multi-dimensional indexing formula
-                # offset = i₁ × (s₂ × s₃ × ... × sₙ) + i₂ × (s₃ × ... × sₙ) + ... + iₙ₋₁ × sₙ + iₙ
-                # where i is the index and s is the dimension size
-                offset = 0
-                for i, idx in enumerate(indices):
-                    # Calculate stride (element spacing) for this dimension
-                    stride = element_size  # Start with basic element size
-                    for dim in dimensions[i+1:]:  # Multiply by all subsequent dimension sizes
-                        stride *= dim
-                    offset += idx * stride  # Add this dimension's contribution to the offset
+            # Normalize indices to handle all cases: integer, slice, list, numpy array, etc.
+            normalized_indices = []
+            output_shape = []
 
-                # Seek to the exact byte position of the target element
-                self.file.file.seek(data_start_pos + offset)
-                # Read exactly one element's worth of binary data
-                buffer = self.file.file.read(element_size)
+            # If indices is empty or all slices are [:], return the full array
+            if not indices or (all(isinstance(idx, slice) and idx.start is None and
+                            idx.stop is None and idx.step is None for idx in indices)):
+                result = np.empty(dimensions, dtype=dtype)
+                # Calculate total size of the array in bytes
+                total_size = element_size
+                for dim in dimensions:
+                    total_size *= dim
 
-                # Convert binary data to a NumPy array containing a single element
-                single_element = np.frombuffer(buffer, dtype=dtype, count=1)
+                # Read the entire array at once
+                self.file.file.seek(data_start_pos)
+                buffer = self.file.file.read(total_size)
+                result = np.frombuffer(buffer, dtype=dtype).reshape(dimensions)
 
-                # Handle endianness differences if needed
+                # Correct the endianness if needed
                 if need_byteswap:
-                    single_element = single_element.byteswap()
+                    result = result.byteswap()
 
-                # Extract the scalar value from the NumPy array
-                result = single_element[0].item()
+                return result
 
-            # Case 2: Partial indexing - accessing a sub-array (slice of the array)
-            # When fewer indices than dimensions are provided, we're extracting a sub-array
-            else:
-                # Calculate the shape of the resulting sub-array (remaining dimensions)
-                result_shape = dimensions[len(indices):]  # Take dimensions that weren't indexed
+            # Process each index in the tuple
+            for i, idx in enumerate(indices):
+                if i >= len(dimensions):
+                    raise IndexError(f"Too many indices for array with shape {dimensions}")
 
-                # Calculate the total number of elements in the sub-array
-                total_elements = 1
-                for dim in result_shape:
-                    total_elements *= dim
+                dim_size = dimensions[i]
 
-                # Calculate the base offset to the start of the sub-array
-                # This is similar to the scalar case, but only for the provided indices
+                if isinstance(idx, slice):
+                    # Handle slices by calculating start, stop, step
+                    start = 0 if idx.start is None else idx.start
+                    stop = dim_size if idx.stop is None else idx.stop
+                    step = 1 if idx.step is None else idx.step
+
+                    # Handle negative indices
+                    if start < 0:
+                        start = dim_size + start
+                    if stop < 0:
+                        stop = dim_size + stop
+
+                    # Clamp indices to valid ranges
+                    start = max(0, min(start, dim_size))
+                    stop = max(start, min(stop, dim_size))
+
+                    # Calculate result shape for this dimension
+                    slice_len = max(0, (stop - start + step - 1) // step)
+                    output_shape.append(slice_len)
+
+                    # Store the slice indices
+                    normalized_indices.append(('slice', (start, stop, step)))
+
+                elif isinstance(idx, (list, np.ndarray)):
+                    # Handle lists or numpy arrays of indices
+                    # Convert negative indices to positive
+                    processed_indices = []
+                    for single_idx in idx:
+                        if single_idx < 0:
+                            single_idx = dim_size + single_idx
+                        if single_idx < 0 or single_idx >= dim_size:
+                            raise IndexError(f"Index {single_idx} is out of bounds for dimension {i} with size {dim_size}")
+                        processed_indices.append(single_idx)
+
+                    output_shape.append(len(processed_indices))
+                    normalized_indices.append(('array', processed_indices))
+
+                else:
+                    # Handle integer index (direct element access)
+                    # Convert negative indices to positive
+                    if idx < 0:
+                        idx = dim_size + idx
+
+                    # Bounds checking
+                    if idx < 0 or idx >= dim_size:
+                        raise IndexError(f"Index {idx} is out of bounds for dimension {i} with size {dim_size}")
+
+                    normalized_indices.append(('int', idx))
+                    # Integer indexing removes this dimension from the result shape
+
+            # Add all remaining dimensions as full slices
+            for i in range(len(normalized_indices), len(dimensions)):
+                dim_size = dimensions[i]
+                output_shape.append(dim_size)
+                normalized_indices.append(('slice', (0, dim_size, 1)))
+
+            # If there are no dimensions in output shape (all indices are integers),
+            # we're accessing a single element
+            if all(idx_type == 'int' for idx_type, _ in normalized_indices):
+                # Calculate offset for direct element access
                 offset = 0
-                for i, idx in enumerate(indices):
+                for i, (_, idx) in enumerate(normalized_indices):
                     # Calculate stride for this dimension
                     stride = element_size
                     for dim in dimensions[i+1:]:
                         stride *= dim
                     offset += idx * stride
 
-                # Read the entire sub-array as a contiguous block of memory
-                # This is more efficient than reading elements individually
+                # Read the element directly
                 self.file.file.seek(data_start_pos + offset)
-                buffer = self.file.file.read(total_elements * element_size)
+                buffer = self.file.file.read(element_size)
+                value = np.frombuffer(buffer, dtype=dtype, count=1)
 
-                # Convert the binary data to a NumPy array with the appropriate type
-                result = np.frombuffer(buffer, dtype=dtype)
+                # Correct the endianness if needed
+                if need_byteswap:
+                    value = value.byteswap()
 
-                # Reshape to match the sub-array dimensions
-                if result_shape:
-                    result = result.reshape(result_shape)
+                result = value[0].item()
 
-                # Handle endianness differences if needed
+                return result
+
+            else:
+                # Create the result array with the calculated shape
+                result = np.empty(output_shape, dtype=dtype)
+
+                # Check if we can optimize by reading continuous blocks
+                # This happens when the last N dimensions are all slices with step=1
+                continuous_read_possible = False
+
+                # Find the first non-integer index (the first dimension that contributes to output)
+                first_non_int_idx = None
+                for i, (idx_type, _) in enumerate(normalized_indices):
+                    if idx_type != 'int':
+                        first_non_int_idx = i
+                        break
+
+                if first_non_int_idx is not None:
+                    # Check if all remaining dimensions after some point are contiguous slices
+                    # A contiguous slice means it's a slice with step=1 or it's the full dimension
+                    continuous_start_dim = None
+                    for i in range(len(normalized_indices) - 1, first_non_int_idx - 1, -1):
+                        idx_type, idx_val = normalized_indices[i]
+                        if idx_type == 'slice':
+                            _, _, step = idx_val
+                            if step != 1:
+                                break
+                        elif idx_type != 'int':  # If it's an array index, we can't do continuous reading
+                            break
+                        continuous_start_dim = i
+
+                    # If we found a continuous block starting point
+                    if continuous_start_dim is not None:
+                        continuous_read_possible = True
+
+                if continuous_read_possible:
+                    # We can read continuous blocks for the inner dimensions
+                    def fill_array_optimized(arr, arr_idx=(), file_idx_components=None, depth=0):
+                        if file_idx_components is None:
+                            file_idx_components = [None] * len(normalized_indices)
+
+                        # If we've reached the continuous block starting dimension
+                        if depth == continuous_start_dim - first_non_int_idx:
+                            # At this point, we have fixed the outer dimensions and can read a continuous block
+
+                            # Calculate file index for the fixed dimensions
+                            file_idx = [0] * len(normalized_indices)
+                            for i, (idx_type, idx_val) in enumerate(normalized_indices):
+                                if i < continuous_start_dim:
+                                    if idx_type == 'int':
+                                        file_idx[i] = idx_val
+                                    else:  # 'slice' or 'array'
+                                        component_idx = file_idx_components[i]
+                                        if idx_type == 'slice':
+                                            start, _, step = idx_val
+                                            file_idx[i] = start + component_idx * step
+                                        else:  # 'array'
+                                            file_idx[i] = idx_val[component_idx]
+                                elif idx_type == 'slice':
+                                    # For continuous dimensions, start at the beginning of the slice
+                                    start, _, _ = idx_val
+                                    file_idx[i] = start
+
+                            # Calculate the starting offset in the file
+                            offset = 0
+                            for i, idx in enumerate(file_idx):
+                                stride = element_size
+                                for dim in dimensions[i+1:]:
+                                    stride *= dim
+                                offset += idx * stride
+
+                            # Calculate the size of the continuous block to read
+                            block_size = element_size
+                            block_shape = []
+                            for i in range(continuous_start_dim, len(normalized_indices)):
+                                idx_type, idx_val = normalized_indices[i]
+                                if idx_type == 'slice':
+                                    start, stop, step = idx_val
+                                    # Since we know step is 1 for continuous dimensions
+                                    block_size *= (stop - start)
+                                    block_shape.append(stop - start)
+
+                            # Read the entire continuous block at once
+                            self.file.file.seek(data_start_pos + offset)
+                            buffer = self.file.file.read(block_size)
+
+                            # Convert to numpy array and reshape
+                            block_data = np.frombuffer(buffer, dtype=dtype)
+                            if block_shape:
+                                block_data = block_data.reshape(block_shape)
+
+                            # Assign the entire block to the output array
+                            if arr_idx:
+                                arr[arr_idx] = block_data
+                            else:
+                                # If arr_idx is empty, we're assigning to the entire array
+                                arr[()] = block_data
+
+                            return
+
+                        # For dimensions before the continuous block, iterate as before
+                        # Map current output dimension to corresponding original dimension
+                        orig_dim = None
+                        for i, (idx_type, _) in enumerate(normalized_indices):
+                            if idx_type != 'int' and file_idx_components[i] is None:
+                                orig_dim = i
+                                break
+
+                        # Iterate through this dimension
+                        for i in range(output_shape[depth]):
+                            new_arr_idx = arr_idx + (i,)
+                            new_file_idx_components = file_idx_components.copy()
+                            new_file_idx_components[orig_dim] = i
+                            fill_array_optimized(arr, new_arr_idx, new_file_idx_components, depth + 1)
+
+                    # Start the optimized filling process
+                    fill_array_optimized(result)
+
+                else:
+                    # Fall back to element-by-element reading when continuous blocks aren't possible
+                    def fill_array(arr, arr_idx=(), file_idx_components=None, depth=0):
+                        if file_idx_components is None:
+                            file_idx_components = [None] * len(normalized_indices)
+
+                        if depth == len(output_shape):
+                            # Calculate full file index
+                            file_idx = []
+                            for i, (idx_type, idx_val) in enumerate(normalized_indices):
+                                if idx_type == 'int':
+                                    file_idx.append(idx_val)
+                                else:  # 'slice' or 'array'
+                                    component_idx = file_idx_components[i]
+                                    if idx_type == 'slice':
+                                        start, _, step = idx_val
+                                        file_idx.append(start + component_idx * step)
+                                    else:  # 'array'
+                                        file_idx.append(idx_val[component_idx])
+
+                            # Calculate file offset
+                            offset = 0
+                            for i, idx in enumerate(file_idx):
+                                stride = element_size
+                                for dim in dimensions[i+1:]:
+                                    stride *= dim
+                                offset += idx * stride
+
+                            # Read data from file
+                            self.file.file.seek(data_start_pos + offset)
+                            buffer = self.file.file.read(element_size)
+                            value = np.frombuffer(buffer, dtype=dtype, count=1)[0]
+
+                            # Assign to array
+                            arr[arr_idx] = value
+                            return
+
+                        # Map current output dimension to corresponding original dimension
+                        orig_dim = None
+                        for i, (idx_type, _) in enumerate(normalized_indices):
+                            if idx_type != 'int' and file_idx_components[i] is None:
+                                orig_dim = i
+                                break
+
+                        # Iterate through this dimension
+                        for i in range(output_shape[depth]):
+                            new_arr_idx = arr_idx + (i,)
+                            new_file_idx_components = file_idx_components.copy()
+                            new_file_idx_components[orig_dim] = i
+                            fill_array(arr, new_arr_idx, new_file_idx_components, depth + 1)
+
+                    # Start the recursive filling process for element-by-element reading
+                    fill_array(result)
+
+                # Correct the endianness if needed
                 if need_byteswap:
                     result = result.byteswap()
 
@@ -1531,76 +1985,3 @@ class objPointer:
             # This includes primitive types like integers, floats, strings, etc.
             raise TypeError(f"Object of type '{symbol}' does not support indexing")
 
-    def keys(self):
-        """
-        Return a list of keys from a dictionary object.
-
-        Returns:
-            list: List of keys from the dictionary
-
-        Raises:
-            TypeError: If the object is not a dictionary
-        """
-        # Store current position
-        current_pos = self.reader._getPos()
-
-        # Move to the position of this object
-        self.reader._setPos(self.position)
-
-        # Re-read the object type and handle footnotes
-        is_footnote = True
-        while is_footnote:
-            symbol, size, dimensions = self.reader._read_header()
-            if symbol == '*':
-                # Skip over footnote without reading its content
-                self.reader._read_object()
-            else:
-                is_footnote = False
-
-        # Check if object is a dictionary
-        if symbol != '{':
-            self.reader._setPos(current_pos)
-            raise TypeError(f"Object of type '{symbol}' is not a dictionary")
-
-        # Read keys while skipping values
-        keys = []
-        while True:
-            key_symbol, key_size, key_dimensions = self.reader._read_header()
-
-            # Check if we've reached the end of the dictionary
-            if key_symbol == '}':
-                break
-
-            # Read the key
-            key = self.reader._read_element(key_symbol, key_size, key_dimensions)
-            if isinstance(key, list):
-                key = self.reader._convert_to_deep_tuple(key)
-
-            keys.append(key)
-            # Skip the value
-            self._skip_object()
-
-        # Restore original position
-        self.reader._setPos(current_pos)
-        return keys
-
-    def __call__(self):
-        """
-        Convert the entire object to a Python object.
-
-        Returns:
-            Any: The Python object read from the file
-        """
-        # Save current position
-        current_pos = self.reader._getPos()
-
-        # Move to the position of this object
-        self.reader._setPos(self.position)
-
-        # Read the object
-        result = self.reader._read_object()
-
-        # Restore original position
-        self.reader._setPos(current_pos)
-
-        return result

@@ -1,7 +1,7 @@
 # xtype - Python library  <img src="figures/logo_xtype.png" width="50" align="right">
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.2.0-green.svg)](https://github.com/bitagoras/xtype-python)
+[![Version](https://img.shields.io/badge/version-0.3.0-green.svg)](https://github.com/bitagoras/xtype-python)
 
 xtype is a Python library for serializing and deserializing data structures using the [xtype](https://github.com/bitagoras/xtype) binary format, optimized for efficient data exchange and storage.
 
@@ -58,6 +58,63 @@ with xtype.File("xtype-data.bin", 'r') as xf:
         print(chunk)
 ```
 
+## Element Access Features
+
+xtype supports efficient element access through indexing and slicing, allowing you to read specific elements from arrays and nested structures without loading the entire data set into memory.
+
+### Accessing Dictionary Elements
+
+```python
+# Access dictionary values by key
+with xtype.File("data.bin", 'r') as xf:
+    # Access a top-level element
+    value = xf["key"]()  # The () converts to Python object
+
+    # Access nested dictionary elements
+    nested_value = xf["parent"]["child"]()
+```
+
+### Accessing List and Array Elements
+
+```python
+with xtype.File("data.bin", 'r') as xf:
+    # Access list items by index
+    first_item = xf["my_list"][0]()
+
+    # Access 2D array elements
+    array_item = xf["my_array"][0,0]  # Note that no () is needed for array elements
+
+    # Access 3D array elements
+    value = xf["array_3d"][0,0,1]  # Second element in first row and column
+```
+
+### Using Slices for Lists and Arrays
+
+```python
+with xtype.File("data.bin", 'r') as xf:
+    # List slices
+    slice1 = xf["my_list"][1:4]  # Elements 1 through 3
+    slice2 = xf["my_list"][::2]  # Every other element
+
+    # Array slices
+    # Get a slice of array with multiple dimensions
+    subset = xf["my_3d_array"][0:2, 1:3, 2:4]
+
+    # Slices with steps
+    stepped_slice = xf["my_array"][0, 0, ::2]  # Every other element in 3rd dimension
+
+    # Negative indices
+    end_slice = xf["my_array"][0, 0, -2:]  # Last two elements
+```
+
+### Mixed Indexing with Arrays
+
+```python
+with xtype.File("data.bin", 'r') as xf:
+    # Mixed integer and slice indexing
+    row_slice = xf["my_3d_array"][0, 1, :]  # All elements in a specific row
+```
+
 ## API Reference
 
 ### XTypeFile
@@ -78,6 +135,8 @@ xtype.File(filename: str, mode: str = 'r')
 - `write(data)`: Serialize and write a Python object to the file
 - `read(byteorder='auto')`: Read and deserialize data from the file
 - `read_debug(indent_size=2, max_indent_level=10, byteorder='auto', max_binary_bytes=15)`: Read and format output for debugging
+- `keys()`: Return a list of keys if the root object is a dictionary
+- `__getitem__(key)`: Access an element within the file (supports integer indexing, slicing, and dictionary key access)
 
 
 ## Project Links
