@@ -19,7 +19,7 @@ License: MIT
 Project: https://github.com/bitagoras/xtype-python
 """
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 
 import struct
 import numpy as np
