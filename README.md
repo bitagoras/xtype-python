@@ -1,4 +1,4 @@
-# xtype - Python library  <img src="figures/logo_xtype.png" width="50" align="right">
+# xtype - Python library  <img src="doc/logo_xtype.png" width="50" align="right">
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/version-0.3.0-green.svg)](https://github.com/bitagoras/xtype-python)

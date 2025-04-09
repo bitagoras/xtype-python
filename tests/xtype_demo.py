@@ -8,7 +8,8 @@ Including examples of the advanced array indexing functionality.
 
 import numpy as np
 import os
-
+import sys
+sys.path.append("../lib")
 import xtype
 
 print("XType Format Demo")
