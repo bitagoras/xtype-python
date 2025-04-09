@@ -1,7 +1,7 @@
-# xtype - Python library  <img src="figures/logo_xtype.png" width="50" align="right">
+# xtype - Python library  <img src="doc/logo_xtype.png" width="50" align="right">
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.3.0-green.svg)](https://github.com/bitagoras/xtype-python)
+[![Version](https://img.shields.io/badge/version-0.3.1-green.svg)](https://github.com/bitagoras/xtype-python)
 
 xtype is a Python library for serializing and deserializing data structures using the [xtype](https://github.com/bitagoras/xtype) binary format, optimized for efficient data exchange and storage.
 
@@ -79,7 +79,7 @@ with xtype.File("data.bin", 'r') as xf:
 ```python
 with xtype.File("data.bin", 'r') as xf:
     # Access list items by index
-    first_item = xf["my_list"][0]()
+    first_item = xf["my_list"][0]()  # () converts the object to Python
 
     # Access 2D array elements
     array_item = xf["my_array"][0,0]  # Note that no () is needed for array elements

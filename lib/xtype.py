@@ -19,12 +19,11 @@ License: MIT
 Project: https://github.com/bitagoras/xtype-python
 """
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 
 import struct
 import numpy as np
-from typing import Any, Dict, List, Tuple, Union, BinaryIO, Iterator, Optional, Callable
-import itertools
+from typing import Any, Dict, List, Tuple, BinaryIO, Iterator
 
 DEFAULT_BYTE_ORDER = 'big'
 
@@ -1565,7 +1564,11 @@ class objPointer:
                 # Note: This is O(n) access as we must traverse the list sequentially
                 index = 0
                 while index < item:
-                    self._skip_object()
+                    # Skip current object and check if we've reached the end of the list
+                    next_symbol = self._skip_object()
+                    if next_symbol == ']':
+                        # We've reached the end of the list before finding the desired index
+                        raise IndexError(f"List index {item} out of range, list has only {index} elements")
                     index += 1
 
                 # Create a new objPointer at the current position (pointing to the target element)
