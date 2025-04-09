@@ -19,7 +19,7 @@ License: MIT
 Project: https://github.com/bitagoras/xtype-python
 """
 
-__version__ = "0.3.1"
+__version__ = "0.3.2"
 
 import struct
 import numpy as np
@@ -155,6 +155,8 @@ class File:
         elif self.mode == 'r':
             self.file = open(self.filename, 'rb')
             self.reader = XTypeFileReader(self.file)
+            # Read BOM to detect byte order automatically
+            self.reader._read_bom()
         else:
             raise ValueError(f"Unsupported mode: {self.mode}")
 
@@ -180,13 +182,9 @@ class File:
         self.writer._write_bom()
         self.writer._write_object(data)
 
-    def read(self, byteorder: str = 'auto') -> Any:
+    def read(self) -> Any:
         """
         Read an xtype file and convert it to a Python object.
-
-        Args:
-            byteorder: The byte order of multi-byte integers in the file.
-                       'big', 'little' or 'auto'. Defaults to 'auto'.
 
         Returns:
             Any: The Python object read from the file
@@ -197,16 +195,8 @@ class File:
         if self.mode != 'r':
             raise IOError("File is not open in read mode")
 
-        # Set byte order
-        if byteorder in ('little', 'big'):
-            self.reader.byteorder = byteorder
-
         # Reset the file position to the beginning
         self.file.seek(0)
-
-        # If byteorder is 'auto', try to detect it from the BOM
-        if byteorder == 'auto':
-            self.reader._read_bom()
 
         # Start recursive parsing
         return self.reader.read()
@@ -627,7 +617,7 @@ class XTypeFileReader:
             pos += nRest
         return pos
 
-    def read(self, byteorder: str = 'auto', pos: int = 0) -> Any:
+    def read(self, pos: int = 0) -> Any:
         """
         Read an xtype file and convert it to a Python object.
 
@@ -635,8 +625,6 @@ class XTypeFileReader:
         and returns a Python object that corresponds to what was written.
 
         Args:
-            byteorder: The byte order of multi-byte integers in the file.
-                       'big', 'little' or 'auto'. Defaults to 'auto'.
             pos: File start position for reading
 
         Returns:
@@ -645,17 +633,9 @@ class XTypeFileReader:
         if not self.file or self.file.closed:
             raise IOError("File is not open for reading")
 
-        # Set byte order
-        if byteorder in ('little', 'big'):
-            self.byteorder = byteorder
-
         # Reset the file position to the beginning
         self.file.seek(pos)
         self.file._pending_binary_size = 0
-
-        # If byteorder is 'auto', try to detect it from the BOM
-        if byteorder == 'auto':
-            self._read_bom()
 
         # Start recursive parsing
         return self._read_object()
