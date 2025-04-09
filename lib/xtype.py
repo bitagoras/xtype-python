@@ -23,8 +23,7 @@ __version__ = "0.3.1"
 
 import struct
 import numpy as np
-from typing import Any, Dict, List, Tuple, Union, BinaryIO, Iterator, Optional, Callable
-import itertools
+from typing import Any, Dict, List, Tuple, BinaryIO, Iterator
 
 DEFAULT_BYTE_ORDER = 'big'
 
