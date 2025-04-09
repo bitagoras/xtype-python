@@ -1565,7 +1565,11 @@ class objPointer:
                 # Note: This is O(n) access as we must traverse the list sequentially
                 index = 0
                 while index < item:
-                    self._skip_object()
+                    # Skip current object and check if we've reached the end of the list
+                    next_symbol = self._skip_object()
+                    if next_symbol == ']':
+                        # We've reached the end of the list before finding the desired index
+                        raise IndexError(f"List index {item} out of range, list has only {index} elements")
                     index += 1
 
                 # Create a new objPointer at the current position (pointing to the target element)
