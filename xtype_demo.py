@@ -67,15 +67,23 @@ print("\n\n2. ObjPointer Navigation Demo")
 print("------------------------------")
 
 with xtype.File(test_file, 'r') as xf:
-    print("\n2.1 Show dictionary length and keys:")
-    print(len(xf), xf.keys())
+    print("\n2.1 Show dictionary length without converting the elements:")
+    print(len(xf))
 
-    print("\n2.2 Access dictionary values by key:")
+    print("\n2.2 Show dictionary keys:")
+    print(xf.keys())
+
+    print("\n2.3 Access dictionary values by key:")
     # Get a specific dictionary key using __getitem__
     text_value = xf["text"]()  # Call to convert to Python object
     print(f"Text value: {text_value}")
 
-    print("\n2.3 Access nested dictionary values:")
+    print("\n2.4 Show list length without converting the elements:")
+    # Get a specific dictionary key using __getitem__
+    list_len = len(xf["text"])  # Call to convert to Python object
+    print(f"List length: {list_len}")
+
+    print("\n2.5 Access nested dictionary values:")
     print("Get whole subitem:")
     dict_value = xf["numeric_values"]()
     print(dict_value)
@@ -87,14 +95,14 @@ with xtype.File(test_file, 'r') as xf:
     float_value = xf["numeric_values"]["float"]()
     print(f"Float value: {float_value}")
 
-    print(f"\n2.4 Access list elements (len = {len(xf['text'])}) by index:")
+    print(f"\n2.6 Access list elements by index:")
     # Get specific list elements
     hello_value = xf["text"][0]()
     print(f"First text item: {hello_value}")
     world_value = xf["text"][1]()
     print(f"Second text item: {world_value}")
 
-    print("\n2.5 Basic array element access:")
+    print("\n2.7 Basic array element access:")
     # Access array elements
     first_float = xf["float_array"][0]
     print(f"First float in array: {first_float}")
@@ -111,16 +119,16 @@ with xtype.File(test_file, 'r') as xf:
     nested_value = xf["array_3d"][0,0,1]
     print(f"Value at [0,0,1] in 3D array: {nested_value}")
 
-    print("\n2.6 List slicing example:")
+    print("\n2.8 List slicing example:")
     # Demonstrate list slicing on the text list
     list_slice = xf["text"][0:2]  # Get all elements
     print(f"Full list slice xf[\"text\"][0:2]: {list_slice}")
 
-    print("\n2.7 Lenght of list:")
+    print("\n2.9 Lenght of list:")
     # Len of array
     print(f'len(xf["basic_data_types"]): {len(xf["basic_data_types"])}')
 
-    print("\n2.8 Navigate complex nested structures:")
+    print("\n2.10 Navigate complex nested structures:")
     # Chain multiple navigation steps
     nested_list_item = xf["basic_data_types"][3][1]()
     print(f"Nested list item at basic_data_types[3][1]: {nested_list_item}")
@@ -131,7 +139,7 @@ with xtype.File(test_file, 'r') as xf:
     print(f"Slice with step xf[\"basic_data_types\"][4:0:-2]: {step_slice}")
 
 
-    print("\n2.9 Demonstrate performance benefit for large structures:")
+    print("\n2.11 Demonstrate performance benefit for large structures:")
     # Only convert specific parts of the structure without loading everything
     print("Converting only specific parts of the data structure:")
     specific_array = xf["array_3d"]()
@@ -211,154 +219,3 @@ with xtype.File(array_test_file, 'r') as xf:
     print(f"Values: \n{subset7}")
 
 print("\nDemo completed successfully!")
-
-# Output:
-
-# XType Format Demo
-# =================
-
-# 1. Basic Data Serialization Demo
-# ------------------------------
-
-# 1.1 Writing test data to file...
-# File size: 315 bytes
-
-# 1.2 Reading file in raw debug mode:
-# *j: 04 d2
-# {
-#   4s: "text"
-#   [
-#     5s: "hello"
-#     5s: 77 6f 72 6c 64
-#   ]
-#   M(14)s: 6e 75 6d 65 72 69 63 5f 76 61 6c 75 65 73
-#   {
-#     7s: 69 6e 74 65 67 65 72
-#     I: 2a
-#     5s: 66 6c 6f 61 74
-#     d: 40 09 21 fb 54 44 2e ea
-#     9s: 6c 61 72 67 65 5f 69 6e 74
-#     L: 7f ff ff ff ff ff ff ff
-#   }
-#   M(16)s: 62 61 73 69 63 5f 64 61 74 61 5f 74 79 70 65 ... (16 bytes total)
-#   [
-#     TFn
-#     [
-#       I: 07
-#       d: 40 1e cc cc cc cc cc cd
-#     ]
-#   ]
-#   M(11)s: 62 69 6e 61 72 79 5f 64 61 74 61
-#   M(19)x: 42 69 6e 61 72 79 20 64 61 74 61 20 65 78 61 ... (19 bytes total)
-#   M(11)s: 66 6c 6f 61 74 5f 61 72 72 61 79
-#   3d: 3f f8 00 00 00 00 00 00 40 04 00 00 00 00 00 ... (24 bytes total)
-#   8s: 61 72 72 61 79 5f 33 64
-#   123k: 00 00 00 01 00 00 00 02 00 00 00 03 00 00 00 ... (24 bytes total)
-#   M(15)s: 73 74 72 69 6e 67 5f 61 72 72 61 79 5f 32 64
-#   238s: 61 70 70 6c 65 00 00 00 62 61 6e 61 6e 61 00 ... (48 bytes total)
-# }
-
-# 1.3 Original test data:
-# {'text': ['hello', 'world'], 'numeric_values': {'integer': 42, 'float': 3.14159265359, 'large_int': 9223372036854775807}, 'basic_data_types': [True, False, None, [7, 7.7]], 'binary_data': b'Binary data example', 'float_array': array([1.5, 2.5, 3.5]), 'array_3d': array([[[1, 2, 3],
-#         [4, 5, 6]]]), 'string_array_2d': array([[b'apple', b'banana', b'cherry'],
-#        [b'orange', b'grape', b'lemon']], dtype='|S8')}
-
-# 1.4 Reading data using read method:
-# {'text': ['hello', 'world'], 'numeric_values': {'integer': 42, 'float': 3.14159265359, 'large_int': 9223372036854775807}, 'basic_data_types': [True, False, None, [7, 7.7]], 'binary_data': b'Binary data example', 'float_array': array([1.5, 2.5, 3.5]), 'array_3d': array([[[1, 2, 3],
-#         [4, 5, 6]]]), 'string_array_2d': array([[b'apple', b'banana', b'cherry'],
-#        [b'orange', b'grape', b'lemon']], dtype='|S8')}
-
-
-# 2. ObjPointer Navigation Demo
-# ------------------------------
-
-# 2.1 Show dictionary keys:
-# ['text', 'numeric_values', 'basic_data_types', 'binary_data', 'float_array', 'array_3d', 'string_array_2d']
-
-# 2.2 Access dictionary values by key:
-# Text value: ['hello', 'world']
-
-# 2.3 Access nested dictionary values:
-# Get whole subitem:
-# {'integer': 42, 'float': 3.14159265359, 'large_int': 9223372036854775807}
-# Get sub-subitem:
-# Integer value: 42
-# Float value: 3.14159265359
-
-# 2.4 Access list elements by index:
-# First text item: hello
-# Second text item: world
-
-# 2.5 Basic array element access:
-# First float in array: 1.5
-# Value at [0] in 3D array: [[1 2 3]
-#  [4 5 6]]
-# Value at [0,0] in 3D array: [1 2 3]
-# Value at [0,0,1] in 3D array: 2
-
-# 2.5.1 List slicing example:
-# Full list slice xf["text"][0:2]: ['hello', 'world']
-# Slice with step xf["basic_data_types"][0:4:2]: [True, None]
-# Slice with step xf["basic_data_types"][4:0:-2]: [None, True]
-
-# 2.6 Navigate complex nested structures:
-# Nested list item at basic_data_types[3][1]: 7.7
-
-# 2.7 Demonstrate performance benefit for large structures:
-# Converting only specific parts of the data structure:
-# 3D array: [[[1 2 3]
-#   [4 5 6]]]
-
-
-# 3. Advanced Array Indexing Demo
-# ----------------------------
-
-# 3.1 Creating test file with 4D array...
-
-# 3.2 Access with partial indexing (fewer indices than dimensions):
-# xf["array_4d"][1, 2]
-# Shape: (5, 6)
-# First few values: [180 181 182]...
-
-# 3.3 Access with slice indexing:
-# xf["array_4d"][1:, 2, 3]
-# Shape: (2, 6)
-# Values:
-# [[120 121 122 123 124 125]
-#  [126 127 128 129 130 131]]
-
-# 3.4 Access full array with [:]:
-# xf["array_4d"][:]
-# Shape: (3, 4, 5, 6)
-# First five elements: [0 1 2 3 4]
-
-# 3.5 Access with step in slice:
-# xf["array_4d"][0, 0, 0, ::2]
-# Shape: (3,)
-# Values: [0 2 4]
-
-# 3.6 Access with list indexing:
-# xf["array_4d"][0, [0, 2], 1]
-# Shape: (2, 6)
-# Values:
-# [[ 0  1  2  3  4  5]
-#  [60 61 62 63 64 65]]
-
-# Shape of complex slice:
-# Shape: (2, 2, 2, 2)
-# Values first part):
-# [[43 45]
-#  [49 51]]
-
-# 3.8 Combination of integer and slice indexing:
-# Shape: (2, 5)
-# Values:
-# [30 31 32 33 34]
-
-# 3.9 Negative indices in slices:
-# Shape: (2, 2)
-# Values:
-# [[21 22]
-#  [23 24]]
-
-# Demo completed successfully!

@@ -273,24 +273,24 @@ class File:
         # Create an objPointer at the beginning of the file
         ptr = objPointer(self, 0)
         return ptr.keys()
-        
+
     def __len__(self):
         """
         Return the length of the root object if it is a list or dictionary.
-        
+
         Returns:
             int: Number of items in the list or dictionary
-            
+
         Raises:
             TypeError: If the root object is neither a list nor a dictionary
             IOError: If the file is not open for reading
         """
         if not self.file or self.file.closed:
             raise IOError("File is not open for reading")
-            
+
         if self.mode != 'r':
             raise IOError("File is not open in read mode")
-            
+
         # Create an objPointer at the beginning of the file
         ptr = objPointer(self, 0)
         return len(ptr)
@@ -1424,23 +1424,23 @@ class objPointer:
         # Restore original position
         self.reader._setPos(current_pos)
         return keys
-        
+
     def __len__(self):
         """
         Return the length of a list, dictionary, or array object.
-        
+
         Returns:
             int: Number of items in the list, dictionary, or the first dimension of an array
-            
+
         Raises:
             TypeError: If the object does not support length operations
         """
         # Store current position
         current_pos = self.reader._getPos()
-        
+
         # Move to the position of this object
         self.reader._setPos(self.position)
-        
+
         # Re-read the object type and handle footnotes
         is_footnote = True
         while is_footnote:
@@ -1450,7 +1450,7 @@ class objPointer:
                 self.reader._read_object()
             else:
                 is_footnote = False
-        
+
         # Check if object is a list or dictionary
         if symbol == '{':
             # For dictionaries, use the keys method to get the length
@@ -1459,23 +1459,24 @@ class objPointer:
         elif symbol == '[':
             # For lists, count the number of items
             count = 0
-            
+
             # Read items until end of list or EOF
             try:
+                # Skip each item until we reach the end of the list (']')
                 while True:
-                    item_symbol, item_size, item_dimensions = self.reader._read_header()
-                    
-                    # Check if we've reached the end of the list
-                    if item_symbol == ']':
+                    # Skip the item and check its returned symbol
+                    symbol = self._skip_object()
+
+                    # If we've reached the end of the list, stop counting
+                    if symbol == ']':
                         break
-                    
-                    # Skip the item and increment the counter
-                    self._skip_object()
+
+                    # Otherwise, increment the counter
                     count += 1
             except EOFError:
                 # Handle case where EOF closes the list
                 pass
-            
+
             # Restore original position
             self.reader._setPos(current_pos)
             return count
@@ -1495,9 +1496,14 @@ class objPointer:
 
         Handles footnotes and correctly counts opening and closing brackets/braces
         to ensure proper balance is maintained.
+
+        Returns:
+            str: The symbol that was found after skipping (usually the next element's symbol
+             or a closing bracket/brace)
         """
         nestedCount = None
-        while nestedCount != 0:
+        symbol = None
+        while nestedCount is None or nestedCount > 0:
             if nestedCount is None:
                 nestedCount = 0
             symbol, size, dimensions = self.reader._read_header()
@@ -1510,6 +1516,7 @@ class objPointer:
                 nestedCount -= 1
             elif nestedCount == 0:
                 break
+        return symbol
 
     def __getitem__(self, item):
         """
