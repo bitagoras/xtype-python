@@ -133,8 +133,8 @@ xtype.File(filename: str, mode: str = 'r')
 #### Methods
 
 - `write(data)`: Serialize and write a Python object to the file
-- `read(byteorder='auto')`: Read and deserialize data from the file
-- `read_debug(indent_size=2, max_indent_level=10, byteorder='auto', max_binary_bytes=15)`: Read and format output for debugging
+- `read()`: Read and deserialize data from the file
+- `read_debug(indent_size=2, max_indent_level=10, max_binary_bytes=15)`: Read and format output for debugging
 - `keys()`: Return a list of keys if the root object is a dictionary
 - `__len__()`: Return the number of items in a list or dictionary, or the first dimension size of an array
 - `__getitem__(key)`: Access an element within the file (supports integer indexing, slicing, and dictionary key access)

@@ -146,12 +146,27 @@ class File:
         Access an element within the file.
 
         Creates an objPointer at the beginning of the file and uses its __getitem__ method.
+        Supports various indexing operations for different data structures:
 
         Args:
-            key: Index (for lists), key (for dicts), or slice (for arrays)
+            key: The index specifier, which can be:
+                - Integer index (for lists and arrays)
+                - Dictionary key (for dictionaries)
+                - Slice object (for lists and arrays)
+                - List/array of indices (for arrays)
+                - Tuple of indices/slices/lists (for multi-dimensional arrays)
 
         Returns:
-            objPointer: A new objPointer pointing to the beginning of the found object
+            For lists: An objPointer pointing to the found object (for integer indices)
+                      or a Python list (for slices)
+            For dictionaries: An objPointer pointing to the found object
+            For arrays: The actual array data (NumPy array) or scalar value
+
+        Raises:
+            IndexError: If the index is out of bounds or the item is not found
+            KeyError: If the dictionary key is not found
+            TypeError: If the object does not support the requested indexing operation
+            IOError: If the file is not open for reading or not in read mode
         """
         if not self.file or self.file.closed:
             raise IOError("File is not open for reading")
@@ -370,8 +385,18 @@ class XTypeFileWriter:
         """
         Write a NumPy array to the file.
 
+        Supports various data types including integers, floats, booleans, and strings.
+        Special handling is provided for string arrays, where an additional dimension
+        is added to represent the string length for multi-dimensional string arrays.
+
+        The array is automatically converted to C-contiguous order if needed,
+        and byte swapping is performed if the system's endianness differs from the file's.
+
         Args:
-            arr: The NumPy array to write
+            arr: The NumPy array to write with any supported dtype
+
+        Raises:
+            TypeError: If the array has an unsupported dtype
         """
         # Handle array dimensions
         for dim in arr.shape:
@@ -1122,13 +1147,21 @@ class XTypeFileReader:
         """
         Read a NumPy array from the file.
 
+        Supports various data types including integers, floats, booleans, and strings.
+        Special handling is provided for string arrays, where the last dimension
+        represents the string length for multi-dimensional string arrays.
+
         Args:
-            dimensions: The dimensions of the array
+            dimensions: The dimensions of the array (shape)
             type_code: The xtype type code
             size: The total size of binary data in bytes
 
         Returns:
-            np.ndarray: The NumPy array read from the file
+            np.ndarray: The NumPy array read from the file with proper shape and data type
+            str: For 1D string arrays, returns a Python string instead of an array
+
+        Raises:
+            ValueError: If an unsupported array type is encountered
         """
         # Read the binary data
         binary_data = self._read_raw_data(size)
@@ -1392,6 +1425,8 @@ class objPointer:
         """
         Return the length of a list, dictionary, or array object.
 
+        For multi-dimensional arrays, returns the size of the first dimension.
+
         Returns:
             int: Number of items in the list, dictionary, or the first dimension of an array
 
@@ -1486,25 +1521,33 @@ class objPointer:
         Access a sub-element within the object using indexing operations.
 
         This method provides flexible indexing for different data structures:
-        - For lists: Uses integer indices to access elements by position
+        - For lists: Uses integer indices to access elements by position or slices for ranges
         - For dictionaries: Uses keys to access elements by key lookup
-        - For arrays: Supports both direct element access and sub-array slicing
-          with multi-dimensional indexing capabilities
+        - For arrays: Supports comprehensive array indexing including:
+          - Integer indexing for single elements
+          - Slice indexing for sub-arrays
+          - List/array indexing for non-contiguous selections
+          - Multi-dimensional indexing with tuples
+          - Optimized block reading for contiguous slices
 
         Args:
             item: The index specifier, which can be:
                 - Integer index (for lists and arrays)
                 - Dictionary key (for dictionaries)
-                - Tuple of indices (for multi-dimensional arrays)
+                - Slice object (for lists and arrays)
+                - List/array of indices (for arrays)
+                - Tuple of indices/slices/lists (for multi-dimensional arrays)
 
         Returns:
-            For lists and dictionaries: An objPointer pointing to the found object
+            For lists: An objPointer pointing to the found object (for integer indices)
+                      or a Python list (for slices)
+            For dictionaries: An objPointer pointing to the found object
             For arrays: The actual array data (NumPy array) or scalar value
 
         Raises:
             IndexError: If the index is out of bounds or the item is not found
             TypeError: If the object does not support the requested indexing operation
-            ValueError: If an unsupported array type is encountered
+            ValueError: If an unsupported array type is encountered or invalid slice parameters
         """
         # Store current position to restore it later if needed
         self.reader._setPos(self.position)
