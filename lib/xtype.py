@@ -24,70 +24,7 @@ __version__ = "0.3.2"
 import struct
 import numpy as np
 from typing import Any, Dict, List, Tuple, BinaryIO, Iterator
-
-DEFAULT_BYTE_ORDER = 'big'
-
-# Size in bytes for each xtype type code
-# This mapping is used to calculate memory requirements and array offsets
-TYPE_SIZES = {
-    # Signed integers (1, 2, 4, 8 bytes)
-    'i': 1, 'j': 2, 'k': 4, 'l': 8,
-    # Unsigned integers (1, 2, 4, 8 bytes)
-    'I': 1, 'J': 2, 'K': 4, 'L': 8,
-    # Boolean (1 byte)
-    'b': 1,
-    # Floating point (2, 4, 8 bytes for float16, float32, float64)
-    'h': 2, 'f': 4, 'd': 8,
-    # String encodings
-    's': 1,  # UTF-8 string (variable bytes per character)
-    'u': 2,  # UTF-16 string (2 bytes per character)
-    # Other types
-    'S': 1,  # Struct type as array of bytes
-    'x': 1,  # Generic byte array
-}
-
-# Type mapping between Python/NumPy types and xtype format type codes
-# Used during serialization to determine the appropriate type code for each value
-TYPE_MAP = {
-    # Python native type mappings
-    bool: 'b',    # Boolean to xtype boolean
-    int: 'k',     # Python int defaults to 32-bit integer
-    float: 'd',   # Python float defaults to 64-bit double
-    str: 's',     # Python string to UTF-8 encoded string
-    bytes: 'x',   # Python bytes to raw byte array
-
-    # NumPy specific type mappings for precise control
-    np.dtype('bool'): 'b',    # Boolean
-    np.dtype('int8'): 'i',    # 8-bit signed integer
-    np.dtype('int16'): 'j',   # 16-bit signed integer
-    np.dtype('int32'): 'k',   # 32-bit signed integer
-    np.dtype('int64'): 'l',   # 64-bit signed integer
-    np.dtype('uint8'): 'I',   # 8-bit unsigned integer
-    np.dtype('uint16'): 'J',  # 16-bit unsigned integer
-    np.dtype('uint32'): 'K',  # 32-bit unsigned integer
-    np.dtype('uint64'): 'L',  # 64-bit unsigned integer
-    np.dtype('float16'): 'h', # 16-bit half-precision float
-    np.dtype('float32'): 'f', # 32-bit single-precision float
-    np.dtype('float64'): 'd'  # 64-bit double-precision float
-}
-
-# Map xtype type codes to NumPy dtypes
-# Used during deserialization to convert binary data to appropriate NumPy types
-DTYPE_MAP = {
-    'b': np.bool_,     # Boolean
-    'i': np.int8,      # 8-bit signed integer
-    'j': np.int16,     # 16-bit signed integer
-    'k': np.int32,     # 32-bit signed integer
-    'l': np.int64,     # 64-bit signed integer
-    'I': np.uint8,     # 8-bit unsigned integer
-    'x': np.uint8,     # Raw bytes are treated as 8-bit unsigned integers
-    'J': np.uint16,    # 16-bit unsigned integer
-    'K': np.uint32,    # 32-bit unsigned integer
-    'L': np.uint64,    # 64-bit unsigned integer
-    'h': np.float16,   # 16-bit half-precision float
-    'f': np.float32,   # 32-bit single-precision float
-    'd': np.float64    # 64-bit double-precision float
-}
+import sys
 
 # Grammar of xtype format
 # This formal grammar defines the structure of the xtype binary format
@@ -102,8 +39,8 @@ DTYPE_MAP = {
 # <dict>       ::= "{}" | "{" <dict_items> "}" | "{" <EOF> | "{" <list_items> <EOF>
 # <dict_items> ::= <element> <object> | <element> <object> <dict_items>
 # <element>    ::= <type> <bin_data> | "T"  | "F" | "n"
-# <type>       ::= <lenght> <type> | <bin_data>
-# <lenght>     ::= "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" |
+# <type>       ::= <length> <type> | <bin_data>
+# <length>     ::= "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" |
 #                  "M" <bin_data> | "N" <bin_data> | "O" <bin_data> | "P" <bin_data>
 # <bin_type>   ::= "i" | "j" | "k" | "l" | "I" | "J" | "K" | "L" |
 #                  "b" | "h" | "f" | "d" | "s" | "u" | "S" | "x"
@@ -122,13 +59,17 @@ class File:
     - NumPy arrays: 1D, 2D, and higher-dimensional arrays with various data types
     """
 
-    def __init__(self, filename: str, mode: str = 'r'):
+    def __init__(self, filename: str, mode: str = 'r', byteorder: str = 'auto'):
         """
         Initialize an xtype.File object.
 
         Args:
             filename: Path to the file
             mode: File mode ('w' for write, 'r' for read)
+            byteorder: The byte order of multi-byte integers in the file.
+                       'big', 'little' or 'auto'. Defaults to 'auto'.
+                       'auto' selects the systems byte order for writing
+                       and 'big' or that of the optional BOM for reading.
         """
         self.filename = filename
         self.mode = mode
@@ -137,6 +78,7 @@ class File:
         # Reader and writer instances (initialized in open())
         self.reader = None
         self.writer = None
+        self.byteorder = byteorder
 
     def __enter__(self):
         """Context manager entry point."""
@@ -151,12 +93,10 @@ class File:
         """Open the file for reading or writing."""
         if self.mode == 'w':
             self.file = open(self.filename, 'wb')
-            self.writer = XTypeFileWriter(self.file)
+            self.writer = XTypeFileWriter(self.file, byteorder=self.byteorder)
         elif self.mode == 'r':
             self.file = open(self.filename, 'rb')
-            self.reader = XTypeFileReader(self.file)
-            # Read BOM to detect byte order automatically
-            self.reader._read_bom()
+            self.reader = XTypeFileReader(self.file, byteorder=self.byteorder)
         else:
             raise ValueError(f"Unsupported mode: {self.mode}")
 
@@ -225,7 +165,7 @@ class File:
         # Use the objPointer's __getitem__ method
         return root[key]
 
-    def read_debug(self, indent_size: int = 2, max_indent_level: int = 10, byteorder: str = 'auto', max_binary_bytes: int = 15) -> Iterator[str]:
+    def read_debug(self, indent_size: int = 2, max_indent_level: int = 10, max_binary_bytes: int = 15) -> Iterator[str]:
         """
         Iterator to read raw data from an xtype file and convert each output to a formatted string.
 
@@ -240,7 +180,7 @@ class File:
         # Reset the file position at the start
         self.file.seek(0)
 
-        return self.reader.read_debug(indent_size, max_indent_level, byteorder, max_binary_bytes)
+        return self.reader.read_debug(indent_size, max_indent_level, max_binary_bytes)
 
     def keys(self):
         """
@@ -289,13 +229,29 @@ class XTypeFileWriter:
     A class for writing Python data structures to files using the xtype binary format.
     """
 
-    # Default byteorder is big-endian ('>') as used in all struct.pack calls
-    byteorder = DEFAULT_BYTE_ORDER
+    # Type mapping between Python/NumPy types and xtype format type codes
+    # Used during serialization to determine the appropriate type code for each value
+    type_map = {
+        # Python native type mappings
+        bool: 'b',    # Boolean to xtype boolean
+        int: 'k',     # Python int defaults to 32-bit integer
+        float: 'd',   # Python float defaults to 64-bit double
+        str: 's',     # Python string to UTF-8 encoded string
+        bytes: 'x',   # Python bytes to raw byte array
 
-    # Struct format character for byteorder
-    _struct_byteorder_format = {
-        'little': '<',
-        'big': '>'
+        # NumPy specific type mappings for precise control
+        np.dtype('bool'): 'b',    # Boolean
+        np.dtype('int8'): 'i',    # 8-bit signed integer
+        np.dtype('int16'): 'j',   # 16-bit signed integer
+        np.dtype('int32'): 'k',   # 32-bit signed integer
+        np.dtype('int64'): 'l',   # 64-bit signed integer
+        np.dtype('uint8'): 'I',   # 8-bit unsigned integer
+        np.dtype('uint16'): 'J',  # 16-bit unsigned integer
+        np.dtype('uint32'): 'K',  # 32-bit unsigned integer
+        np.dtype('uint64'): 'L',  # 64-bit unsigned integer
+        np.dtype('float16'): 'h', # 16-bit half-precision float
+        np.dtype('float32'): 'f', # 32-bit single-precision float
+        np.dtype('float64'): 'd'  # 64-bit double-precision float
     }
 
     def __init__(self, file: BinaryIO, byteorder: str = 'auto'):
@@ -306,12 +262,9 @@ class XTypeFileWriter:
             file: The file object to write to
         """
         self.file = file
-
-        if byteorder in ('little', 'big'):
-            self.byteorder = byteorder
-
-        # Type mapping between Python/NumPy types and xtype format types
-        self.type_map = TYPE_MAP
+        self.byteorder = byteorder if byteorder != 'auto' else sys.byteorder
+        self.need_byteswap = self.byteorder != sys.byteorder
+        self.struct_byteorder = {'little': '<', 'big': '>'}[self.byteorder]
 
     def _write_bom(self):
         """
@@ -398,8 +351,7 @@ class XTypeFileWriter:
             self._write_int_value(value, type_code)
         elif isinstance(value, float):
             self.file.write(b'd')
-            struct_format = self._struct_byteorder_format.get(self.byteorder, '>')
-            self.file.write(struct.pack(f'{struct_format}d', value))
+            self.file.write(struct.pack(f'{self.struct_byteorder}d', value))
         elif isinstance(value, str):
             # Write string with length prefix
             encoded = value.encode('utf-8')
@@ -457,6 +409,11 @@ class XTypeFileWriter:
         if not arr.flags.c_contiguous:
             arr = np.ascontiguousarray(arr)
 
+        if self.need_byteswap:
+            tobytes = lambda x: x.byteswap().tobytes()
+        else:
+            tobytes = lambda x: x.tobytes()
+
         # Write the array data based on its type
         if dtype == np.dtype('bool'):
             # Convert boolean array to bytes (0x00 for False, 0xFF for True)
@@ -466,19 +423,19 @@ class XTypeFileWriter:
             if type_code in ('i', 'I'):  # uint8, int8
                 self.file.write(arr.tobytes())
             elif type_code in ('j', 'J'):  # uint16, int16
-                self.file.write(arr.astype(dtype).byteswap(self.byteorder == 'big').tobytes())
+                self.file.write(tobytes(arr.astype(dtype)))
             elif type_code in ('k', 'K'):  # uint32, int32
-                self.file.write(arr.astype(dtype).byteswap(self.byteorder == 'big').tobytes())
+                self.file.write(tobytes(arr.astype(dtype)))
             elif type_code in ('l', 'L'):  # uint64, int64
-                self.file.write(arr.astype(dtype).byteswap(self.byteorder == 'big').tobytes())
+                self.file.write(tobytes(arr.astype(dtype)))
         elif np.issubdtype(dtype, np.floating):
             # Handle floating point types
             if type_code == 'h':  # float16
-                self.file.write(arr.astype(np.float16).byteswap(self.byteorder == 'big').tobytes())
+                self.file.write(tobytes(arr.astype(np.float16)))
             elif type_code == 'f':  # float32
-                self.file.write(arr.astype(np.float32).byteswap(self.byteorder == 'big').tobytes())
+                self.file.write(tobytes(arr.astype(np.float32)))
             elif type_code == 'd':  # float64
-                self.file.write(arr.astype(np.float64).byteswap(self.byteorder == 'big').tobytes())
+                self.file.write(tobytes(arr.astype(np.float64)))
 
     def _select_int_type(self, value: int) -> str:
         """
@@ -517,23 +474,22 @@ class XTypeFileWriter:
             value: The integer value
             type_code: The xtype type code
         """
-        struct_format = self._struct_byteorder_format.get(self.byteorder, '>')
         if type_code == 'I':
-            self.file.write(struct.pack(f'{struct_format}B', value))
+            self.file.write(struct.pack(f'{self.struct_byteorder}B', value))
         elif type_code == 'J':
-            self.file.write(struct.pack(f'{struct_format}H', value))
+            self.file.write(struct.pack(f'{self.struct_byteorder}H', value))
         elif type_code == 'K':
-            self.file.write(struct.pack(f'{struct_format}I', value))
+            self.file.write(struct.pack(f'{self.struct_byteorder}I', value))
         elif type_code == 'L':
-            self.file.write(struct.pack(f'{struct_format}Q', value))
+            self.file.write(struct.pack(f'{self.struct_byteorder}Q', value))
         elif type_code == 'i':
-            self.file.write(struct.pack(f'{struct_format}b', value))
+            self.file.write(struct.pack(f'{self.struct_byteorder}b', value))
         elif type_code == 'j':
-            self.file.write(struct.pack(f'{struct_format}h', value))
+            self.file.write(struct.pack(f'{self.struct_byteorder}h', value))
         elif type_code == 'k':
-            self.file.write(struct.pack(f'{struct_format}i', value))
+            self.file.write(struct.pack(f'{self.struct_byteorder}i', value))
         elif type_code == 'l':
-            self.file.write(struct.pack(f'{struct_format}q', value))
+            self.file.write(struct.pack(f'{self.struct_byteorder}q', value))
 
     def _write_length(self, length: int):
         """
@@ -542,26 +498,25 @@ class XTypeFileWriter:
         Args:
             length: The length to write
         """
-        struct_format = self._struct_byteorder_format.get(self.byteorder, '>')
         if length <= 9:
             # Single-digit lengths are written as ASCII characters '0' through '9'
             self.file.write(str(length).encode())
         elif length <= 0xFF:
             # uint8 length
             self.file.write(b'M')
-            self.file.write(struct.pack(f'{struct_format}B', length))
+            self.file.write(struct.pack(f'{self.struct_byteorder}B', length))
         elif length <= 0xFFFF:
             # uint16 length
             self.file.write(b'N')
-            self.file.write(struct.pack(f'{struct_format}H', length))
+            self.file.write(struct.pack(f'{self.struct_byteorder}H', length))
         elif length <= 0xFFFFFFFF:
             # uint32 length
             self.file.write(b'O')
-            self.file.write(struct.pack(f'{struct_format}I', length))
+            self.file.write(struct.pack(f'{self.struct_byteorder}I', length))
         else:
             # uint64 length
             self.file.write(b'P')
-            self.file.write(struct.pack(f'{struct_format}Q', length))
+            self.file.write(struct.pack(f'{self.struct_byteorder}Q', length))
 
 
 class XTypeFileReader:
@@ -569,16 +524,44 @@ class XTypeFileReader:
     A class for reading Python data structures from files using the xtype binary format.
     """
 
-    # Default byteorder is big-endian as used in all read methods
-    byteorder = DEFAULT_BYTE_ORDER
-
-    # Struct format character for byteorder
-    _struct_byteorder_format = {
-        'little': '<',
-        'big': '>'
+    # Size in bytes for each xtype type code
+    # This mapping is used to calculate memory requirements and array offsets
+    type_sizes = {
+        # Signed integers (1, 2, 4, 8 bytes)
+        'i': 1, 'j': 2, 'k': 4, 'l': 8,
+        # Unsigned integers (1, 2, 4, 8 bytes)
+        'I': 1, 'J': 2, 'K': 4, 'L': 8,
+        # Boolean (1 byte)
+        'b': 1,
+        # Floating point (2, 4, 8 bytes for float16, float32, float64)
+        'h': 2, 'f': 4, 'd': 8,
+        # String encodings
+        's': 1,  # UTF-8 string (variable bytes per character)
+        'u': 2,  # UTF-16 string (2 bytes per character)
+        # Other types
+        'S': 1,  # Struct type as array of bytes
+        'x': 1,  # Generic byte array
     }
 
-    def __init__(self, file: BinaryIO):
+    # Map xtype type codes to NumPy dtypes
+    # Used during deserialization to convert binary data to appropriate NumPy types
+    dtype_map = {
+        'b': np.bool_,     # Boolean
+        'i': np.int8,      # 8-bit signed integer
+        'j': np.int16,     # 16-bit signed integer
+        'k': np.int32,     # 32-bit signed integer
+        'l': np.int64,     # 64-bit signed integer
+        'I': np.uint8,     # 8-bit unsigned integer
+        'x': np.uint8,     # Raw bytes are treated as 8-bit unsigned integers
+        'J': np.uint16,    # 16-bit unsigned integer
+        'K': np.uint32,    # 32-bit unsigned integer
+        'L': np.uint64,    # 64-bit unsigned integer
+        'h': np.float16,   # 16-bit half-precision float
+        'f': np.float32,   # 32-bit single-precision float
+        'd': np.float64    # 64-bit double-precision float
+    }
+
+    def __init__(self, file: BinaryIO, byteorder: str = 'auto'):
         """
         Initialize an XTypeFileReader object.
 
@@ -588,6 +571,17 @@ class XTypeFileReader:
         self.file = file
         self._pending_binary_size = 0
         self._pending_binary_type = None
+
+        if byteorder == 'auto':
+            # Read BOM to detect byte order automatically
+            self._read_bom()
+            if self.need_byteswap:
+                self.byteorder = {'little': 'big', 'big': 'little'}[sys.byteorder]
+            else:
+                self.byteorder = sys.byteorder
+        else:
+            self.byteorder = byteorder
+        self.struct_byteorder = {'little': '<', 'big': '>'}[self.byteorder]
 
     def _setPos(self, pos: int):
         """
@@ -640,7 +634,7 @@ class XTypeFileReader:
         # Start recursive parsing
         return self._read_object()
 
-    def read_debug(self, indent_size: int = 2, max_indent_level: int = 10, byteorder: str = 'auto', max_binary_bytes: int = 15) -> Iterator[str]:
+    def read_debug(self, indent_size: int = 2, max_indent_level: int = 10, max_binary_bytes: int = 15) -> Iterator[str]:
         """
         Iterator to read raw data from an xtype file and convert each output to a formatted string.
 
@@ -658,8 +652,6 @@ class XTypeFileReader:
         Args:
             indent_size: Number of spaces per indentation level (default: 2)
             max_indent_level: Maximum indentation level (default: 10)
-            byteorder: The byte order of multi-byte integers in the file.
-                       'big', 'little' or 'auto'. Defaults to 'auto'.
             max_binary_bytes: Maximum number of binary bytes to read (default: 10)
 
         Yields:
@@ -667,11 +659,6 @@ class XTypeFileReader:
         """
         if not self.file or self.file.closed:
             raise IOError("File is not open for reading")
-
-
-        # Set byte order
-        if byteorder in ('little', 'big'):
-            self.byteorder = byteorder
 
         # Reset the file position at the start
         self._setPos(0)
@@ -872,9 +859,9 @@ class XTypeFileReader:
                 continue
 
             # Handle data types
-            if char in TYPE_SIZES:
+            if char in self.type_sizes:
                 # For actual data types, calculate the total data size
-                type_size = TYPE_SIZES[char]
+                type_size = self.type_sizes[char]
 
                 # Calculate total size based on accumulated length multiplier
                 total_size = type_size * length_multiplier
@@ -979,7 +966,7 @@ class XTypeFileReader:
         elif symbol == 'n':
             # None
             return None
-        elif symbol in TYPE_SIZES:
+        elif symbol in self.type_sizes:
             # Check if this is an array type or a single element
             if dimensions:
                 # This is an array type
@@ -1017,16 +1004,15 @@ class XTypeFileReader:
             return int.from_bytes(binary_data, byteorder=self.byteorder, signed=False)
         elif type_code in 'hfd':
             # Floating point
-            struct_format = self._struct_byteorder_format.get(self.byteorder, '<')
             if type_code == 'h':
                 # float16
-                return struct.unpack(f'{struct_format}e', binary_data)[0]
+                return struct.unpack(f'{self.struct_byteorder}e', binary_data)[0]
             elif type_code == 'f':
                 # float32
-                return struct.unpack(f'{struct_format}f', binary_data)[0]
+                return struct.unpack(f'{self.struct_byteorder}f', binary_data)[0]
             elif type_code == 'd':
                 # float64
-                return struct.unpack(f'{struct_format}d', binary_data)[0]
+                return struct.unpack(f'{self.struct_byteorder}d', binary_data)[0]
         elif type_code == 's':
             # String
             return binary_data.decode('utf-8')
@@ -1053,7 +1039,7 @@ class XTypeFileReader:
             if symbol == ']':
                 # End of list
                 break
-            elif symbol in TYPE_SIZES:
+            elif symbol in self.type_sizes:
                 # Data type
                 if dimensions:
                     # Array type
@@ -1118,7 +1104,7 @@ class XTypeFileReader:
             symbol, size, dimensions = self._read_header()
 
             # We're reading a value
-            if symbol in TYPE_SIZES:
+            if symbol in self.type_sizes:
                 # Data type
                 if dimensions and (symbol not in 'sx' or len(dimensions) > 1):
                     # Array type
@@ -1183,10 +1169,10 @@ class XTypeFileReader:
                 return string_array.reshape(array_dims)
 
         # Get the NumPy dtype
-        if type_code not in DTYPE_MAP:
+        if type_code not in self.dtype_map:
             raise ValueError(f"Unsupported NumPy type: {type_code}")
 
-        dtype = DTYPE_MAP[type_code]
+        dtype = self.dtype_map[type_code]
 
         # Calculate total number of elements
         total_elements = 1
@@ -1199,15 +1185,17 @@ class XTypeFileReader:
             flat_array = np.frombuffer(binary_data, dtype=np.uint8)
             flat_array = flat_array != 0
         elif type_code in 'jklJKLhfd':
-            # Signed integers (need to be byteswapped because xtype uses big-endian)
+            # Signed integers
             flat_array = np.frombuffer(binary_data, dtype=dtype)
-            flat_array = flat_array.byteswap()
         elif type_code in 'iIx':
-            # Floating point (need to be byteswapped because xtype uses big-endian)
+            # Floating point
             flat_array = np.frombuffer(binary_data, dtype=dtype)
         else:
             # Unsupported type
             raise ValueError(f"Unsupported NumPy type: {type_code}")
+
+        if self.need_byteswap:
+            flat_array = flat_array.byteswap()
 
         # Reshape the array to the specified dimensions
         return flat_array.reshape(dimensions)
@@ -1280,8 +1268,8 @@ class XTypeFileReader:
 
         The file position is reset to the beginning after reading the BOM.
         """
-        # Save the current position
-        current_pos = self.file.tell()
+        # Check if the current position is at the beginning of the file
+        assert self.file.tell() == 0
 
         # Read the first two characters
         marker = self.file.read(2)
@@ -1289,18 +1277,14 @@ class XTypeFileReader:
         # Check if the marker is '*J' which indicates a BOM follows
         if marker == b'*j':
             # Read the 2-byte integer using the current byteorder
-            format_char = self._struct_byteorder_format[self.byteorder]
+            format_char = {'little': '<', 'big': '>'}[sys.byteorder]
             bom_value = struct.unpack(f'{format_char}h', self.file.read(2))[0]
 
             # If the value is -11772, we need to switch the byteorder
-            if bom_value == -11772:
-                self.byteorder = 'little' if self.byteorder == 'big' else 'big'
-            elif bom_value != 1234:
-                # If it's neither 1234 nor -11772, it's not a valid BOM
-                pass  # Keep the default byteorder
+            self.need_byteswap = bom_value == -11772
         else:
             # Reset the file position to the beginning
-            self._setPos(current_pos)
+            self._setPos(0)
 
 
 class objPointer:
@@ -1658,14 +1642,14 @@ class objPointer:
 
             # Get element type information
             element_type = symbol  # The type code for array elements (i, f, d, etc.)
-            element_size = TYPE_SIZES[element_type]  # Size in bytes for each element
+            element_size = self.reader.type_sizes[element_type]  # Size in bytes for each element
             data_start_pos = self.file.file.tell()  # Position where the actual array data begins
 
             # Map the xtype type code to the corresponding NumPy dtype
-            if element_type not in DTYPE_MAP:
+            if element_type not in self.reader.dtype_map:
                 raise ValueError(f"Unsupported NumPy type: {element_type}")
 
-            dtype = DTYPE_MAP[element_type]
+            dtype = self.reader.dtype_map[element_type]
 
             # Normalize indexing to handle both single indices and tuples consistently
             if not isinstance(item, tuple):
@@ -1676,10 +1660,6 @@ class objPointer:
             # Validate that we don't have more indices than dimensions
             if len(indices) > len(dimensions):
                 raise IndexError(f"Too many indices for array with shape {dimensions}")
-
-            # Determine if byte swapping is needed based on endianness differences
-            # between the file's byte order and the system's native byte order
-            need_byteswap = (self.reader.byteorder == 'big') != (np.dtype(dtype).byteorder == '>')
 
             # Handle array indexing based on dimensions and provided indices
 
@@ -1702,7 +1682,7 @@ class objPointer:
                 result = np.frombuffer(buffer, dtype=dtype).reshape(dimensions)
 
                 # Correct the endianness if needed
-                if need_byteswap:
+                if self.reader.need_byteswap:
                     result = result.byteswap()
 
                 return result
@@ -1788,7 +1768,7 @@ class objPointer:
                 value = np.frombuffer(buffer, dtype=dtype, count=1)
 
                 # Correct the endianness if needed
-                if need_byteswap:
+                if self.reader.need_byteswap:
                     value = value.byteswap()
 
                 result = value[0].item()
@@ -1966,7 +1946,7 @@ class objPointer:
                     fill_array(result)
 
                 # Correct the endianness if needed
-                if need_byteswap:
+                if self.reader.need_byteswap:
                     result = result.byteswap()
 
             return result
