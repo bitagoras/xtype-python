@@ -499,22 +499,13 @@ class XTypeFileWriter:
             value: The integer value
             type_code: The xtype type code
         """
-        if type_code == 'I':
-            self.file.write(struct.pack(f'{self.struct_byteorder}B', value))
-        elif type_code == 'J':
-            self.file.write(struct.pack(f'{self.struct_byteorder}H', value))
-        elif type_code == 'K':
-            self.file.write(struct.pack(f'{self.struct_byteorder}I', value))
-        elif type_code == 'L':
-            self.file.write(struct.pack(f'{self.struct_byteorder}Q', value))
-        elif type_code == 'i':
-            self.file.write(struct.pack(f'{self.struct_byteorder}b', value))
-        elif type_code == 'j':
-            self.file.write(struct.pack(f'{self.struct_byteorder}h', value))
-        elif type_code == 'k':
-            self.file.write(struct.pack(f'{self.struct_byteorder}i', value))
-        elif type_code == 'l':
-            self.file.write(struct.pack(f'{self.struct_byteorder}q', value))
+        type_format = {
+            'I': 'B', 'J': 'H', 'K': 'I', 'L': 'Q',  # unsigned
+            'i': 'b', 'j': 'h', 'k': 'i', 'l': 'q'   # signed
+        }
+        format_char = type_format.get(type_code)
+        if format_char:
+            self.file.write(struct.pack(f'{self.struct_byteorder}{format_char}', value))
 
     def _write_length(self, length: int):
         """
