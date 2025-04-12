@@ -25,6 +25,8 @@ import struct
 import numpy as np
 from typing import Any, Dict, List, Tuple, BinaryIO, Iterator
 import sys
+import itertools
+
 
 # Grammar of xtype format
 # This formal grammar defines the structure of the xtype binary format
@@ -1687,302 +1689,104 @@ class objPointer:
 
             # Normalize indexing to handle both single indices and tuples consistently
             if not isinstance(item, tuple):
-                indices = (item,)  # Convert single index to a 1-tuple
+                item_indices = (item,)  # Convert single index to a 1-tuple
             else:
-                indices = item     # Use the tuple as is
+                item_indices = item     # Use the tuple as is
 
             # Validate that we don't have more indices than dimensions
-            if len(indices) > len(dimensions):
+            if len(item_indices) > len(dimensions):
                 raise IndexError(f"Too many indices for array with shape {dimensions}")
 
-            # Handle array indexing based on dimensions and provided indices
+            # Calculate strides (elements to skip for each dimension)
+            # Last dimension stride is 1 element
+            strides = [1]
+            for dim_size in reversed(dimensions[1:]):
+                strides.insert(0, strides[0] * dim_size)
 
-            # Normalize indices to handle all cases: integer, slice, list, numpy array, etc.
-            normalized_indices = []
-            output_shape = []
+            # Process each index: convert integers to slices/tuples for iteration
+            # This will store the final shape of our result
+            result_shape = []
+            # This will store the indices to access for each dimension
+            index_arrays = []
 
-            # If indices is empty or all slices are [:], return the full array
-            if not indices or (all(isinstance(idx, slice) and idx.start is None and
-                            idx.stop is None and idx.step is None for idx in indices)):
-                result = np.empty(dimensions, dtype=dtype)
-                # Calculate total size of the array in bytes
-                total_size = element_size
-                for dim in dimensions:
-                    total_size *= dim
-
-                # Read the entire array at once
-                self.file.file.seek(data_start_pos)
-                buffer = self.file.file.read(total_size)
-                result = np.frombuffer(buffer, dtype=dtype).reshape(dimensions)
-
-                # Correct the endianness if needed
-                if self.reader.need_byteswap:
-                    result = result.byteswap()
-
-                return result
-
-            # Process each index in the tuple
-            for i, idx in enumerate(indices):
-                if i >= len(dimensions):
-                    raise IndexError(f"Too many indices for array with shape {dimensions}")
-
-                dim_size = dimensions[i]
-
-                if isinstance(idx, slice):
-                    # Handle slices by calculating start, stop, step
-                    start = 0 if idx.start is None else idx.start
-                    stop = dim_size if idx.stop is None else idx.stop
-                    step = 1 if idx.step is None else idx.step
-
-                    # Handle negative indices
-                    if start < 0:
-                        start = dim_size + start
-                    if stop < 0:
-                        stop = dim_size + stop
-
-                    # Clamp indices to valid ranges
-                    start = max(0, min(start, dim_size))
-                    stop = max(start, min(stop, dim_size))
-
-                    # Calculate result shape for this dimension
-                    slice_len = max(0, (stop - start + step - 1) // step)
-                    output_shape.append(slice_len)
-
-                    # Store the slice indices
-                    normalized_indices.append(('slice', (start, stop, step)))
-
-                elif isinstance(idx, (list, np.ndarray)):
-                    # Handle lists or numpy arrays of indices
-                    # Convert negative indices to positive
-                    processed_indices = []
-                    for single_idx in idx:
-                        if single_idx < 0:
-                            single_idx = dim_size + single_idx
-                        if single_idx < 0 or single_idx >= dim_size:
-                            raise IndexError(f"Index {single_idx} is out of bounds for dimension {i} with size {dim_size}")
-                        processed_indices.append(single_idx)
-
-                    output_shape.append(len(processed_indices))
-                    normalized_indices.append(('array', processed_indices))
-
-                else:
-                    # Handle integer index (direct element access)
-                    # Convert negative indices to positive
+            # Process each dimension's index specification
+            for i, (idx, dim_size) in enumerate(zip(item_indices, dimensions)):
+                if isinstance(idx, int):
+                    # Single index: convert to a single-element tuple for iteration
                     if idx < 0:
-                        idx = dim_size + idx
-
-                    # Bounds checking
+                        idx += dim_size  # Handle negative indexing
                     if idx < 0 or idx >= dim_size:
-                        raise IndexError(f"Index {idx} is out of bounds for dimension {i} with size {dim_size}")
-
-                    normalized_indices.append(('int', idx))
-                    # Integer indexing removes this dimension from the result shape
-
-            # Add all remaining dimensions as full slices
-            for i in range(len(normalized_indices), len(dimensions)):
-                dim_size = dimensions[i]
-                output_shape.append(dim_size)
-                normalized_indices.append(('slice', (0, dim_size, 1)))
-
-            # If there are no dimensions in output shape (all indices are integers),
-            # we're accessing a single element
-            if all(idx_type == 'int' for idx_type, _ in normalized_indices):
-                # Calculate offset for direct element access
-                offset = 0
-                for i, (_, idx) in enumerate(normalized_indices):
-                    # Calculate stride for this dimension
-                    stride = element_size
-                    for dim in dimensions[i+1:]:
-                        stride *= dim
-                    offset += idx * stride
-
-                # Read the element directly
-                self.file.file.seek(data_start_pos + offset)
-                buffer = self.file.file.read(element_size)
-                value = np.frombuffer(buffer, dtype=dtype, count=1)
-
-                # Correct the endianness if needed
-                if self.reader.need_byteswap:
-                    value = value.byteswap()
-
-                result = value[0].item()
-
-                return result
-
-            else:
-                # Create the result array with the calculated shape
-                result = np.empty(output_shape, dtype=dtype)
-
-                # Check if we can optimize by reading continuous blocks
-                # This happens when the last N dimensions are all slices with step=1
-                continuous_read_possible = False
-
-                # Find the first non-integer index (the first dimension that contributes to output)
-                first_non_int_idx = None
-                for i, (idx_type, _) in enumerate(normalized_indices):
-                    if idx_type != 'int':
-                        first_non_int_idx = i
-                        break
-
-                if first_non_int_idx is not None:
-                    # Check if all remaining dimensions after some point are contiguous slices
-                    # A contiguous slice means it's a slice with step=1 or it's the full dimension
-                    continuous_start_dim = None
-                    for i in range(len(normalized_indices) - 1, first_non_int_idx - 1, -1):
-                        idx_type, idx_val = normalized_indices[i]
-                        if idx_type == 'slice':
-                            _, _, step = idx_val
-                            if step != 1:
-                                break
-                        elif idx_type != 'int':  # If it's an array index, we can't do continuous reading
-                            break
-                        continuous_start_dim = i
-
-                    # If we found a continuous block starting point
-                    if continuous_start_dim is not None:
-                        continuous_read_possible = True
-
-                if continuous_read_possible:
-                    # We can read continuous blocks for the inner dimensions
-                    def fill_array_optimized(arr, arr_idx=(), file_idx_components=None, depth=0):
-                        if file_idx_components is None:
-                            file_idx_components = [None] * len(normalized_indices)
-
-                        # If we've reached the continuous block starting dimension
-                        if depth == continuous_start_dim - first_non_int_idx:
-                            # At this point, we have fixed the outer dimensions and can read a continuous block
-
-                            # Calculate file index for the fixed dimensions
-                            file_idx = [0] * len(normalized_indices)
-                            for i, (idx_type, idx_val) in enumerate(normalized_indices):
-                                if i < continuous_start_dim:
-                                    if idx_type == 'int':
-                                        file_idx[i] = idx_val
-                                    else:  # 'slice' or 'array'
-                                        component_idx = file_idx_components[i]
-                                        if idx_type == 'slice':
-                                            start, _, step = idx_val
-                                            file_idx[i] = start + component_idx * step
-                                        else:  # 'array'
-                                            file_idx[i] = idx_val[component_idx]
-                                elif idx_type == 'slice':
-                                    # For continuous dimensions, start at the beginning of the slice
-                                    start, _, _ = idx_val
-                                    file_idx[i] = start
-
-                            # Calculate the starting offset in the file
-                            offset = 0
-                            for i, idx in enumerate(file_idx):
-                                stride = element_size
-                                for dim in dimensions[i+1:]:
-                                    stride *= dim
-                                offset += idx * stride
-
-                            # Calculate the size of the continuous block to read
-                            block_size = element_size
-                            block_shape = []
-                            for i in range(continuous_start_dim, len(normalized_indices)):
-                                idx_type, idx_val = normalized_indices[i]
-                                if idx_type == 'slice':
-                                    start, stop, step = idx_val
-                                    # Since we know step is 1 for continuous dimensions
-                                    block_size *= (stop - start)
-                                    block_shape.append(stop - start)
-
-                            # Read the entire continuous block at once
-                            self.file.file.seek(data_start_pos + offset)
-                            buffer = self.file.file.read(block_size)
-
-                            # Convert to numpy array and reshape
-                            block_data = np.frombuffer(buffer, dtype=dtype)
-                            if block_shape:
-                                block_data = block_data.reshape(block_shape)
-
-                            # Assign the entire block to the output array
-                            if arr_idx:
-                                arr[arr_idx] = block_data
-                            else:
-                                # If arr_idx is empty, we're assigning to the entire array
-                                arr[()] = block_data
-
-                            return
-
-                        # For dimensions before the continuous block, iterate as before
-                        # Map current output dimension to corresponding original dimension
-                        orig_dim = None
-                        for i, (idx_type, _) in enumerate(normalized_indices):
-                            if idx_type != 'int' and file_idx_components[i] is None:
-                                orig_dim = i
-                                break
-
-                        # Iterate through this dimension
-                        for i in range(output_shape[depth]):
-                            new_arr_idx = arr_idx + (i,)
-                            new_file_idx_components = file_idx_components.copy()
-                            new_file_idx_components[orig_dim] = i
-                            fill_array_optimized(arr, new_arr_idx, new_file_idx_components, depth + 1)
-
-                    # Start the optimized filling process
-                    fill_array_optimized(result)
-
+                        raise IndexError(f"Index {idx} out of bounds for dimension {i} with size {dim_size}")
+                    index_arrays.append((idx,))  # No dimension in result shape (selecting single element)
+                elif isinstance(idx, slice):
+                    # Slice: extract indices and create array
+                    start, stop, step = idx.indices(dim_size)
+                    indices = range(start, stop, step)
+                    index_arrays.append(indices)
+                    result_shape.append(len(indices))  # Add dimension to result shape
+                elif isinstance(idx, (list, np.ndarray)):
+                    # List or numpy array: use directly as indices
+                    indices = []
+                    for j in idx:
+                        if isinstance(j, int):
+                            if j < 0:
+                                j += dim_size  # Handle negative indexing
+                            if j < 0 or j >= dim_size:
+                                raise IndexError(f"Index {j} out of bounds for dimension {i} with size {dim_size}")
+                            indices.append(j)
+                        else:
+                            raise TypeError(f"Indices must be integers, not {type(j).__name__}")
+                    index_arrays.append(indices)
+                    result_shape.append(len(indices))  # Add dimension to result shape
                 else:
-                    # Fall back to element-by-element reading when continuous blocks aren't possible
-                    def fill_array(arr, arr_idx=(), file_idx_components=None, depth=0):
-                        if file_idx_components is None:
-                            file_idx_components = [None] * len(normalized_indices)
+                    raise TypeError(f"Invalid index type: {type(idx).__name__}")
 
-                        if depth == len(output_shape):
-                            # Calculate full file index
-                            file_idx = []
-                            for i, (idx_type, idx_val) in enumerate(normalized_indices):
-                                if idx_type == 'int':
-                                    file_idx.append(idx_val)
-                                else:  # 'slice' or 'array'
-                                    component_idx = file_idx_components[i]
-                                    if idx_type == 'slice':
-                                        start, _, step = idx_val
-                                        file_idx.append(start + component_idx * step)
-                                    else:  # 'array'
-                                        file_idx.append(idx_val[component_idx])
+            chunk_size = element_size
 
-                            # Calculate file offset
-                            offset = 0
-                            for i, idx in enumerate(file_idx):
-                                stride = element_size
-                                for dim in dimensions[i+1:]:
-                                    stride *= dim
-                                offset += idx * stride
+            # For any remaining dimensions not specified in item_indices,
+            # instead of creating full slices, increase the element_size to read data in larger chunks
+            if len(index_arrays) < len(dimensions):
+                # Calculate how much to increase element_size by multiplying by the sizes of all remaining dimensions
+                remaining_dimensions_size = 1
+                for i in range(len(index_arrays), len(dimensions)):
+                    remaining_dimensions_size *= dimensions[i]
+                    result_shape.append(dimensions[i])  # Add dimension to result shape
 
-                            # Read data from file
-                            self.file.file.seek(data_start_pos + offset)
-                            buffer = self.file.file.read(element_size)
-                            value = np.frombuffer(buffer, dtype=dtype, count=1)[0]
+                # Increase chunk_size to read all data for remaining dimensions at once
+                chunk_size *= remaining_dimensions_size
 
-                            # Assign to array
-                            arr[arr_idx] = value
-                            return
+            # If result is empty, return empty array with correct shape and dtype
+            if any(len(arr) == 0 for arr in index_arrays):
+                return np.array([], dtype=dtype).reshape(result_shape)
 
-                        # Map current output dimension to corresponding original dimension
-                        orig_dim = None
-                        for i, (idx_type, _) in enumerate(normalized_indices):
-                            if idx_type != 'int' and file_idx_components[i] is None:
-                                orig_dim = i
-                                break
+            # Use itertools.product to iterate over all combinations of indices
+            binary_data = []
+            for indices in itertools.product(*index_arrays):
+                # Calculate byte offset for this element using the original element size
+                # The strides are based on dimension counts, not bytes
+                offset = sum(idx * stride * element_size for idx, stride in zip(indices, strides))
 
-                        # Iterate through this dimension
-                        for i in range(output_shape[depth]):
-                            new_arr_idx = arr_idx + (i,)
-                            new_file_idx_components = file_idx_components.copy()
-                            new_file_idx_components[orig_dim] = i
-                            fill_array(arr, new_arr_idx, new_file_idx_components, depth + 1)
+                # Seek to the position of this element and read the data
+                self.file.file.seek(data_start_pos + offset)
+                element_bytes = self.file.file.read(chunk_size)
 
-                    # Start the recursive filling process for element-by-element reading
-                    fill_array(result)
+                # Ensure we read the expected number of bytes - this could fail at EOF or with corrupted files
+                assert len(element_bytes) == chunk_size
+                binary_data.append(element_bytes)
 
-                # Correct the endianness if needed
-                if self.reader.need_byteswap:
-                    result = result.byteswap()
+            # Combine all binary data into a single buffer
+            binary_buffer = b''.join(binary_data)
 
+            # Create numpy array from binary data with the correct shape and dtype
+            result = np.frombuffer(binary_buffer, dtype=dtype)
+
+            # Reshape to match the dimensions of our result
+            if result_shape:  # If we have dimensions, reshape; otherwise leave as 1D
+                result = result.reshape(result_shape)
+
+            # Correct the endianness if needed
+            if self.reader.need_byteswap:
+                result = result.byteswap()
             return result
         else:
             # Object is a singular type (int, float, str, etc.) which doesn't support indexing
