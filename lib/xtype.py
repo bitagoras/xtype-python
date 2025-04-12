@@ -932,7 +932,36 @@ class XTypeFileReader:
             # If we get here, we encountered an unexpected character
             raise ValueError(f"Unexpected character in xtype file: {repr(char)}")
 
-    def _read_header(self) -> Tuple[str, List[int], int]:
+    def _read_footnote(self) -> Tuple[str, int, List[int], List[Tuple]]:
+        """
+        Read headers from the file, collecting footnotes until a non-footnote is found.
+
+        Returns:
+            Tuple[str, int, List[int], List[Tuple]]: A tuple containing:
+                - symbol: String representing the type or grammar symbol of the non-footnote element
+                - size: Total size of the binary data in bytes
+                - dimensions: List of dimensions for the non-footnote element
+                - footnotes: List of all footnote elements (can be empty)
+        """
+        footnotes = []
+        isFootnote = True
+
+        while isFootnote:
+            # Read the next header from the file
+            symbol, size, dimensions = self._read_header()
+
+            if symbol == '*':
+                # This is a footnote marker
+                # Read the footnote content that follows the marker
+                footnote_symbol, footnote_size, footnote_dimensions = self._read_header()
+                footnotes.append((footnote_symbol, footnote_size, footnote_dimensions))
+            else:
+                # This is not a footnote, so we're done
+                isFootnote = False
+
+        return symbol, size, dimensions, footnotes
+
+    def _read_header(self) -> Tuple[str, int, List[int]]:
         """
         Read a symbol and size information of an element from the xtype file.
 
@@ -982,14 +1011,8 @@ class XTypeFileReader:
             The Python object read from the file
         """
 
-        isFootnote = True
-        while isFootnote:
-            # Read the next step from the file
-            symbol, size, dimensions = self._read_header()
-            if symbol == '*':
-                symbol, size, dimensions = self._read_header()
-            else:
-                isFootnote = False
+        # Read the symbol, size, dimensions and collect any footnotes
+        symbol, size, dimensions, footnotes = self._read_footnote()
 
         if symbol and not symbol in ']}':
             return self._read_element(symbol, size, dimensions)

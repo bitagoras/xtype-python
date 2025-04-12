@@ -122,7 +122,7 @@ with xtype.File(test_file, 'r') as xf:
 
     print("\n2.8 List slicing example:")
     # Demonstrate list slicing on the text list
-    list_slice = xf["text"][0:2]()  # Get all elements
+    list_slice = xf["text"][0:2]  # Get all elements
     print(f"Full list slice xf[\"text\"][0:2]: {list_slice}")
 
     print("\n2.9 Lenght of list:")
@@ -134,11 +134,8 @@ with xtype.File(test_file, 'r') as xf:
     nested_list_item = xf["basic_data_types"][3][1]()
     print(f"Nested list item at basic_data_types[3][1]: {nested_list_item}")
     # Demonstrate step parameter in list slicing
-    step_slice = xf["basic_data_types"][0:4:2]()  # Get elements with step 2
+    step_slice = xf["basic_data_types"][0:4:2]  # Get elements with step 2
     print(f"Slice with step xf[\"basic_data_types\"][0:4:2]: {step_slice}")
-    step_slice = xf["basic_data_types"][4:0:-2]()  # Get elements with step -2
-    print(f"Slice with step xf[\"basic_data_types\"][4:0:-2]: {step_slice}")
-
 
     print("\n2.11 Demonstrate performance benefit for large structures:")
     # Only convert specific parts of the structure without loading everything
