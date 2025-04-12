@@ -23,7 +23,7 @@ __version__ = "0.3.2"
 
 import struct
 import numpy as np
-from typing import Any, Dict, List, Tuple, BinaryIO, Iterator
+from typing import Any, Dict, List, Tuple, BinaryIO, Iterator, Optional, Union
 import sys
 import itertools
 
@@ -988,10 +988,10 @@ class XTypeFileReader:
             else:
                 isFootnote = False
 
-        if symbol:
+        if symbol and not symbol in ']}':
             return self._read_element(symbol, size, dimensions)
         else:
-            return None
+            return (None, symbol)
 
     def _read_element(self, symbol: str, size: int, dimensions: List[int]) -> Any:
         """
@@ -1027,7 +1027,7 @@ class XTypeFileReader:
                 # This is an array type
                 return self._read_numpy_array(dimensions, symbol, size)
             else:
-                # This is a basic element (scalar or string)
+                # This is a basic element (scalar, string or binary sequence)
                 return self._read_basic_element(symbol, size)
         else:
             # Unexpected symbol
@@ -1197,15 +1197,22 @@ class XTypeFileReader:
         binary_data = self._read_raw_data(size)
 
         # Special handling for string arrays
-        if type_code == 's':
+        if type_code in 'sxu':
             # For 1D arrays, return a Python string
             if len(dimensions) == 1:
+                if type_code == 's':
+                    binary_data = binary_data.decode('utf-8')
+                elif type_code == 'u':
+                    binary_data = binary_data.decode('utf-16')
                 # Decode the binary data as UTF-8 and return as a string
-                return binary_data.decode('utf-8')
+                return binary_data
             else:
                 # For multidimensional arrays, the last dimension is the string length
                 string_length = dimensions[-1]
                 array_dims = dimensions[:-1]
+
+                if type_code == 'u':
+                    binary_data = binary_data.decode('utf-16').encode('utf-8')
 
                 # Calculate total number of strings
                 total_strings = 1
@@ -1530,21 +1537,24 @@ class objPointer:
             str: The symbol that was found after skipping (usually the next element's symbol
              or a closing bracket/brace)
         """
-        nestedCount = None
-        symbol = None
-        while nestedCount is None or nestedCount > 0:
-            if nestedCount is None:
-                nestedCount = 0
-            symbol, size, dimensions = self.reader._read_header()
-            if symbol == '*':
+        symbol = '-'
+        nestedCount = 0
+        while nestedCount > 0 or symbol == '-':
+            next_symbol, size, dimensions = self.reader._read_header()
+            if next_symbol == '*':
                 # Skip over footnote content
                 self._skip_object()
-            elif symbol in '[{':
+            elif next_symbol in '[{':
                 nestedCount += 1
-            elif symbol in ']}':
+            elif next_symbol in ']}':
                 nestedCount -= 1
             elif nestedCount == 0:
+                symbol = next_symbol
                 break
+            else:
+                symbol = next_symbol
+            if symbol == '-':
+                symbol = next_symbol
         return symbol
 
     def __getitem__(self, item):
@@ -1618,71 +1628,53 @@ class objPointer:
                 stop = float('inf') if item.stop is None else item.stop
                 step = 1 if item.step is None else item.step
 
-                # Handle negative step sizes by transforming to positive and reversing at the end
-                negative_step = False
+                # Disallow negative start or stop values
+                if start < 0:
+                    raise ValueError("Negative start index is not supported for list slicing")
+                if stop != float('inf') and stop < 0:
+                    raise ValueError("Negative stop index is not supported for list slicing")
+
+                # Validate step size
                 if step < 0:
-                    # For negative step, we need to reverse direction
-                    negative_step = True
-                    # Swap and negate for processing with positive step
-                    start, stop = (stop - 1 if stop is not None else size - 1), (start - 1 if start is not None else -1)
-                    step = -step
+                    raise ValueError("Negative step size is not supported for list slicing")
                 elif step == 0:
                     raise ValueError("Step size cannot be zero")
 
                 # Create the list to store our results
                 result = []
-
-                # Reset to start position and read the list header again
-                self.reader._setPos(self.position)
-                symbol, size, dimensions = self.reader._read_header()
+                next_symbol = '-'
 
                 # Skip to start position
                 index = 0
                 while index < start:
-                    self._skip_object()
+                    next_symbol = self._skip_object()
                     index += 1
 
                 # Read objects at positions that fall within the slice
                 while index < stop:
-                    # Store the current position to check if we've reached the end of the list
-                    current_pos = self.reader._getPos()
-
-                    # Try to read the next object's header to see if we're at the end of the list
-                    # We need to look ahead without advancing the cursor permanently
-                    try:
-                        next_symbol, _, _ = self.reader._read_header()
-                        # If we see ']', we've reached the end of the list
-                        if next_symbol == ']':
-                            break
-                        # Go back to where we were before the peek
-                        self.reader._setPos(current_pos)
-                    except:
-                        # Error reading ahead, assume we're at the end
+                    # Check if we've reached the end of the list
+                    if next_symbol == ']':
                         break
 
-                    # Read the object and add it to our results
+                    # Read the object directly without creating a new objPointer
                     value = self.reader._read_object()
-                    result.append(value)
+                    if type(value) is not tuple:
+                        result.append(value)
+                    elif value[1] == ']' and stop == float('inf'):
+                        break
+                    else:
+                        raise IndexError(f"List index {index} out of range, unexpected symbol {value}")
 
                     # Skip (step-1) objects to get to the next desired position
                     for _ in range(step - 1):
-                        try:
-                            # Check if we're at the end before skipping
-                            peek_pos = self.reader._getPos()
-                            peek_symbol, _, _ = self.reader._read_header()
-                            if peek_symbol == ']':
+                        # Skip and check if we've reached the end of the list
+                        if self._skip_object() == ']':
+                            if stop == float('inf'):
+                                stop = index
                                 break
-                            self.reader._setPos(peek_pos)
-                            self._skip_object()
-                        except:
-                            # Error skipping ahead, we've reached the end
-                            break
-
                     index += step
 
-                # If we had a negative step, reverse the result
-                if negative_step:
-                    result.reverse()
+                # Result is now complete
                 return result
 
             else:
@@ -1710,7 +1702,7 @@ class objPointer:
                     # Key doesn't match, skip the value and continue to next key-value pair
                     self._skip_object()
 
-        elif dimensions:
+        elif dimensions and (len(dimensions) > 1 or symbol not in 'sxu'):
             # Object is an array - handle direct binary reading with efficient random access
             # This provides O(1) access to array elements regardless of position
 
@@ -1820,41 +1812,130 @@ class objPointer:
                 # Increase chunk_size to read all data for remaining dimensions at once
                 chunk_size *= remaining_dimensions_size
 
-            # If result is empty, return empty array with correct shape and dtype
-            if any(len(arr) == 0 for arr in index_arrays):
-                return np.array([], dtype=dtype).reshape(result_shape)
+            if len(index_arrays) == 0:
+                index_arrays = [(0,)]
 
-            # Use itertools.product to iterate over all combinations of indices
-            binary_data = []
-            for indices in itertools.product(*index_arrays):
-                # Calculate byte offset for this element using the original element size
-                # The strides are based on dimension counts, not bytes
-                offset = sum(idx * stride * element_size for idx, stride in zip(indices, strides))
-
-                # Seek to the position of this element and read the data
-                self.file.file.seek(data_start_pos + offset)
-                element_bytes = self.file.file.read(chunk_size)
-
-                # Ensure we read the expected number of bytes - this could fail at EOF or with corrupted files
-                assert len(element_bytes) == chunk_size
-                binary_data.append(element_bytes)
-
-            # Combine all binary data into a single buffer
-            binary_buffer = b''.join(binary_data)
-
-            # Create numpy array from binary data with the correct shape and dtype
-            result = np.frombuffer(binary_buffer, dtype=dtype)
-
-            # Reshape to match the dimensions of our result
-            if result_shape:  # If we have dimensions, reshape; otherwise leave as 1D
-                result = result.reshape(result_shape)
-
-            # Correct the endianness if needed
-            if self.reader.need_byteswap:
-                result = result.byteswap()
-            return result
+            # Create an ArraySubset that will convert to an array when called
+            # For empty results, index_arrays will be empty and will be handled in __call__
+            return ArraySubset(
+                file=self.file,
+                reader=self.reader,
+                element_type=element_type,
+                element_size=element_size,
+                data_start_pos=data_start_pos,
+                index_arrays=[] if any(len(arr) == 0 for arr in index_arrays) else index_arrays,
+                strides=strides,
+                result_shape=result_shape,
+                chunk_size=chunk_size,
+                dtype=dtype
+            )
         else:
             # Object is a singular type (int, float, str, etc.) which doesn't support indexing
             # This includes primitive types like integers, floats, strings, etc.
             raise TypeError(f"Object of type '{symbol}' does not support indexing")
+
+
+class ArraySubset:
+    """
+    A class that represents a subset of an array in an xtype file.
+
+    This class provides lazy loading of array data, only reading from the file
+    when the data is explicitly requested via the __call__ method.
+    """
+
+    def __init__(self, file, reader, element_type, element_size, data_start_pos,
+                 index_arrays, strides, result_shape, chunk_size, dtype):
+        """
+        Initialize an ArraySubset.
+
+        Args:
+            file: The xtype.File object
+            reader: The XTypeFileReader object
+            element_type: The type code for array elements
+            element_size: Size in bytes for each element
+            data_start_pos: Position where the actual array data begins
+            index_arrays: Arrays of indices to access for each dimension
+            strides: Elements to skip for each dimension
+            result_shape: The final shape of the result
+            chunk_size: Size of each chunk to read
+            dtype: NumPy dtype for the array elements
+        """
+        self.file = file
+        self.reader = reader
+        self.element_type = element_type
+        self.element_size = element_size
+        self.data_start_pos = data_start_pos
+        self.index_arrays = index_arrays
+        self.strides = strides
+        self.result_shape = result_shape
+        self.chunk_size = chunk_size
+        self.dtype = dtype
+
+    def __call__(self):
+        """
+        Convert the array subset to a NumPy array.
+
+        Returns:
+            np.ndarray: The NumPy array representation of this subset
+        """
+        # Handle empty arrays
+        if not self.index_arrays:
+            return np.array([], dtype=self.dtype).reshape(self.result_shape)
+
+        # Use itertools.product to iterate over all combinations of indices
+        binary_data = []
+        for indices in itertools.product(*self.index_arrays):
+            # Calculate byte offset for this element using the original element size
+            # The strides are based on dimension counts, not bytes
+            offset = sum(idx * stride * self.element_size
+                         for idx, stride in zip(indices, self.strides))
+
+            # Seek to the position of this element and read the data
+            self.file.file.seek(self.data_start_pos + offset)
+            element_bytes = self.file.file.read(self.chunk_size)
+
+            # Ensure we read the expected number of bytes - this could fail at EOF or with corrupted files
+            assert len(element_bytes) == self.chunk_size
+            binary_data.append(element_bytes)
+
+        # Combine all binary data into a single buffer
+        binary_buffer = b''.join(binary_data)
+
+        # Create numpy array from binary data with the correct shape and dtype
+        result = np.frombuffer(binary_buffer, dtype=self.dtype)
+
+        # Reshape to match the dimensions of our result
+        if self.result_shape:  # If we have dimensions, reshape; otherwise leave as 1D
+            result = result.reshape(self.result_shape)
+
+        # Correct the endianness if needed
+        if self.reader.need_byteswap:
+            result = result.byteswap()
+        return result
+
+    def __len__(self):
+        """
+        Return the length of the first dimension of the array.
+
+        Returns:
+            int: The length of the first dimension
+        """
+        if not self.result_shape:
+            return 0
+        return self.result_shape[0]
+
+    def __getitem__(self, item):
+        """
+        Allow further slicing of the array subset.
+        This creates a new ArraySubset representing a view into this one.
+        For simplicity, we just convert to numpy and then slice.
+
+        Args:
+            item: The index or slice to access
+
+        Returns:
+            ArraySubset or Any: A new ArraySubset or a single value
+        """
+        # Convert to numpy and then use numpy's indexing
+        return self()[item]
 

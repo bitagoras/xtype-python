@@ -105,24 +105,24 @@ with xtype.File(test_file, 'r') as xf:
 
     print("\n2.7 Basic array element access:")
     # Access array elements
-    first_float = xf["float_array"][0]
+    first_float = xf["float_array"][0]()
     print(f"First float in array: {first_float}")
 
     # Access 2D sub array (using chained __getitem__ calls)
-    nested_value = xf["array_3d"][0]
+    nested_value = xf["array_3d"][0]()
     print(f"Value at [0] in 3D array: {nested_value}")
 
     # Access 1D array elements (using chained __getitem__ calls)
-    nested_value = xf["array_3d"][0,0]
+    nested_value = xf["array_3d"][0,0]()
     print(f"Value at [0,0] in 3D array: {nested_value}")
 
     # Access single element (using chained __getitem__ calls)
-    nested_value = xf["array_3d"][0,0,1]
+    nested_value = xf["array_3d"][0,0,1]()
     print(f"Value at [0,0,1] in 3D array: {nested_value}")
 
     print("\n2.8 List slicing example:")
     # Demonstrate list slicing on the text list
-    list_slice = xf["text"][0:2]  # Get all elements
+    list_slice = xf["text"][0:2]()  # Get all elements
     print(f"Full list slice xf[\"text\"][0:2]: {list_slice}")
 
     print("\n2.9 Lenght of list:")
@@ -134,9 +134,9 @@ with xtype.File(test_file, 'r') as xf:
     nested_list_item = xf["basic_data_types"][3][1]()
     print(f"Nested list item at basic_data_types[3][1]: {nested_list_item}")
     # Demonstrate step parameter in list slicing
-    step_slice = xf["basic_data_types"][0:4:2]  # Get elements with step -2
+    step_slice = xf["basic_data_types"][0:4:2]()  # Get elements with step 2
     print(f"Slice with step xf[\"basic_data_types\"][0:4:2]: {step_slice}")
-    step_slice = xf["basic_data_types"][4:0:-2]  # Get elements with step -2
+    step_slice = xf["basic_data_types"][4:0:-2]()  # Get elements with step -2
     print(f"Slice with step xf[\"basic_data_types\"][4:0:-2]: {step_slice}")
 
 
@@ -167,55 +167,55 @@ with xtype.File(array_test_file, 'w') as xf:
 with xtype.File(array_test_file, 'r') as xf:
     print("\n3.2 Access with partial indexing (fewer indices than dimensions):")
     # Example: A[1,2] returns array of shape (5,6)
-    subset1 = xf["array_4d"][1, 2]
+    subset1 = xf["array_4d"][1, 2]()
     print(f"xf[\"array_4d\"][1, 2]")
     print(f"Shape: {subset1.shape}")
     print(f"First few values: {subset1[0, 0:3]}...")
 
     print("\n3.3 Access with slice indexing:")
     # Example: A[1:,2,3] returns array of shape (2,6)
-    subset2 = xf["array_4d"][1:, 2, 3]
+    subset2 = xf["array_4d"][1:, 2, 3]()
     print(f"xf[\"array_4d\"][1:, 2, 3]")
     print(f"Shape: {subset2.shape}")
     print(f"Values: \n{subset2}")
 
     print("\n3.4 Access full array with [:]:")
     # Example: A[:] returns the full array
-    full_array = xf["array_4d"][:]
+    full_array = xf["array_4d"][:]()
     print(f"xf[\"array_4d\"][:]")
     print(f"Shape: {full_array.shape}")
     print(f"First five elements: {full_array[0, 0, 0, :5]}")
 
     print("\n3.5 Access with step in slice:")
     # Example: A[0,0,0,::2] returns array of shape (3)
-    subset3 = xf["array_4d"][0, 0, 0, ::2]
+    subset3 = xf["array_4d"][0, 0, 0, ::2]()
     print(f"xf[\"array_4d\"][0, 0, 0, ::2]")
     print(f"Shape: {subset3.shape}")
     print(f"Values: {subset3}")
 
     print("\n3.6 Access with list indexing:")
     # Example: A[0, [0,2], 1] returns array with selected indices from dimension 1
-    subset4 = xf["array_4d"][0, [0, 2], 1]
+    subset4 = xf["array_4d"][0, [0, 2], 1]()
     print(f"xf[\"array_4d\"][0, [0, 2], 1]")
     print(f"Shape: {subset4.shape}")
     print(f"Values: \n{subset4}")
 
     print("\n3.7 Complex slicing example:")
     # Example: A[0:2, 1:3, 2:4, 1:5:2] returns a complex subset
-    subset5 = xf["array_4d"][0:2, 1:3, 2:4, 1:5:2]
+    subset5 = xf["array_4d"][0:2, 1:3, 2:4, 1:5:2]()
     print(f"Shape of complex slice: ")
     print(f"Shape: {subset5.shape}")
     print(f"Values first part): \n{subset5[0, 0]}")
 
     print("\n3.8 Combination of integer and slice indexing:")
     # Example: Mixed indexing approaches
-    subset6 = xf["array_4d"][0, 1:3, :, 2]
+    subset6 = xf["array_4d"][0, 1:3, :, 2]()
     print(f"Shape: {subset6.shape}")
     print(f"Values: \n{subset6[0]}")
 
     print("\n3.9 Negative indices in slices:")
     # Example: Using negative indices
-    subset7 = xf["array_4d"][0, 0, -2:, -3:-1]
+    subset7 = xf["array_4d"][0, 0, -2:, -3:-1]()
     print(f"Shape: {subset7.shape}")
     print(f"Values: \n{subset7}")
 

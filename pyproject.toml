@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "xtype"
+version = "0.3.2"
+description = "A Python library for serializing and deserializing data structures using the xtype binary format"
+readme = "README.md"
+authors = [
+    {name = "bitagoras", email = "bitagoras@users.noreply.github.com"}
+]
+license = {text = "MIT"}
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Software Development :: Libraries",
+    "Topic :: System :: Archiving",
+]
+requires-python = ">=3.6"
+dependencies = [
+    "numpy>=1.15.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/bitagoras/xtype-python"
+BugTracker = "https://github.com/bitagoras/xtype-python/issues"
+
+[tool.pytest]
+testpaths = ["tests"]
+python_files = "test_*.py"
+python_classes = "Test*"
+python_functions = "test_*"
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = "-v"
