@@ -380,6 +380,39 @@ class XTypeFileWriter:
             self._write_length(len(value))
             self.file.write(b'x')
             self.file.write(value)
+        elif isinstance(value, np.number) or isinstance(value, np.bool_):
+            # Handle NumPy scalar types
+            dtype = value.dtype
+            if dtype in self.type_map:
+                type_code = self.type_map[dtype]
+                self.file.write(type_code.encode())
+
+                # Process based on the specific scalar type
+                if np.issubdtype(dtype, np.integer):
+                    # Handle integer types
+                    if np.issubdtype(dtype, np.integer):
+                        data = np.asarray(value, dtype=dtype)
+                        # Only need to byteswap for multi-byte integers (16, 32, 64 bit)
+                        if self.need_byteswap and type_code not in ('i', 'I'):
+                            data = data.byteswap()
+                        self.file.write(data.tobytes())
+                elif np.issubdtype(dtype, np.bool_):
+                    # Handle boolean type
+                    if type_code == 'b':
+                        # boolean
+                        self.file.write(np.asarray(value, dtype=np.bool_).tobytes())
+                elif np.issubdtype(dtype, np.floating):
+                    # Handle floating point types
+                    if type_code in ('h', 'f', 'd'):
+                        # Map type codes to numpy dtypes
+                        dtype_map = {'h': np.float16, 'f': np.float32, 'd': np.float64}
+                        data = np.asarray(value, dtype=dtype_map[type_code])
+                        if self.need_byteswap:
+                            data = data.byteswap()
+                        self.file.write(data.tobytes())
+            else:
+                # Default fallback for unsupported NumPy scalar types: convert to Python scalar
+                self._write_element(value.item())
         else:
             raise TypeError(f"Unsupported type: {type(value)}")
 
@@ -589,6 +622,7 @@ class XTypeFileReader:
         self.file = file
         self._pending_binary_size = 0
         self._pending_binary_type = None
+        self.need_byteswap = False
 
         if byteorder == 'auto':
             # Read BOM to detect byte order automatically
@@ -954,7 +988,10 @@ class XTypeFileReader:
             else:
                 isFootnote = False
 
-        return self._read_element(symbol, size, dimensions)
+        if symbol:
+            return self._read_element(symbol, size, dimensions)
+        else:
+            return None
 
     def _read_element(self, symbol: str, size: int, dimensions: List[int]) -> Any:
         """
@@ -1311,6 +1348,7 @@ class XTypeFileReader:
         else:
             # Reset the file position to the beginning
             self._setPos(0)
+            self.need_byteswap = False
 
 
 class objPointer:
@@ -1708,6 +1746,8 @@ class objPointer:
             result_shape = []
             # This will store the indices to access for each dimension
             index_arrays = []
+            # This will store slice information (step, start, length) for each dimension
+            slice_info = []
 
             # Process each dimension's index specification
             for i, (idx, dim_size) in enumerate(zip(item_indices, dimensions)):
@@ -1718,12 +1758,14 @@ class objPointer:
                     if idx < 0 or idx >= dim_size:
                         raise IndexError(f"Index {idx} out of bounds for dimension {i} with size {dim_size}")
                     index_arrays.append((idx,))  # No dimension in result shape (selecting single element)
+                    slice_info.append((0, 0, 0))  # Not a slice
                 elif isinstance(idx, slice):
                     # Slice: extract indices and create array
                     start, stop, step = idx.indices(dim_size)
                     indices = range(start, stop, step)
                     index_arrays.append(indices)
                     result_shape.append(len(indices))  # Add dimension to result shape
+                    slice_info.append((step, start, len(indices) if len(indices)!=dim_size else -1))  # Store slice parameters
                 elif isinstance(idx, (list, np.ndarray)):
                     # List or numpy array: use directly as indices
                     indices = []
@@ -1742,6 +1784,29 @@ class objPointer:
                     raise TypeError(f"Invalid index type: {type(idx).__name__}")
 
             chunk_size = element_size
+
+            # Optimize by identifying full range slices with (1,0,-1) from the end
+            full_range_count = 0
+            for i in range(len(slice_info) - 1, -1, -1):
+                if slice_info[i] == (1,0,-1):
+                    full_range_count += 1
+                else:
+                    break
+
+            # Reduce all 3 list variables by removing full range slices
+            if full_range_count > 0:
+                slice_info = slice_info[:-full_range_count]
+                index_arrays = index_arrays[:-full_range_count]
+                result_shape = result_shape[:-full_range_count]
+
+            # Check if the last remaining slice has step 1
+            if slice_info and slice_info[-1][0] == 1:  # step == 1
+                step, start, length = slice_info[-1]
+                # Replace the last index_arrays element with just the start value
+                # and increase chunk_size by the length factor
+                if length > 0:  # Make sure length is valid
+                    index_arrays[-1] = (start,)
+                    chunk_size *= length
 
             # For any remaining dimensions not specified in item_indices,
             # instead of creating full slices, increase the element_size to read data in larger chunks
