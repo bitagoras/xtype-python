@@ -684,7 +684,10 @@ class XTypeFileReader:
         self.file._pending_binary_size = 0
 
         # Start recursive parsing
-        return self._read_object()
+        data = self._read_object()
+        if type(data) is tuple:
+            data = None
+        return
 
     def read_debug(self, indent_size: int = 2, max_indent_level: int = 10, max_binary_bytes: int = 15) -> Iterator[str]:
         """
