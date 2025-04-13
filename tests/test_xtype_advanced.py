@@ -130,7 +130,7 @@ class TestXTypeAdvanced(unittest.TestCase):
             obj = xf
             for i in range(10):
                 obj = obj["level"]
-            self.assertEqual(obj["value"](), 42)
+            self.assertEqual(obj["value"], 42)
 
     def test_large_array(self):
         """Test serializing and deserializing a large array."""
@@ -260,10 +260,6 @@ class TestXTypeAdvanced(unittest.TestCase):
 
             # Test nested keys
             self.assertEqual(set(xf["c"].keys()), {"d", "e"})
-
-            # Test keys() raises TypeError for non-dict
-            with self.assertRaises(TypeError):
-                xf["a"].keys()
 
     def test_len_method(self):
         """Test the __len__ method for dictionaries and lists."""

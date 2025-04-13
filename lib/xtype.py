@@ -959,7 +959,7 @@ class XTypeFileReader:
             # If we get here, we encountered an unexpected character
             raise ValueError(f"Unexpected character in xtype file: {repr(char)}")
 
-    def _read_object_info(self) -> Tuple[str, int, List[int], List[Tuple]]:
+    def _read_header(self) -> Tuple[str, int, List[int], List[Tuple]]:
         """
         Read headers from the file, collecting footnotes until a non-footnote is found.
 
@@ -975,12 +975,12 @@ class XTypeFileReader:
 
         while isFootnote:
             # Read the next header from the file
-            symbol, size, shape = self._read_header()
+            symbol, size, shape = self._read_type()
 
             if symbol == '*':
                 # This is a footnote marker
                 # Read the footnote content that follows the marker
-                footnote_symbol, footnote_size, footnote_shape = self._read_header()
+                footnote_symbol, footnote_size, footnote_shape = self._read_type()
                 footnotes.append((footnote_symbol, footnote_size, footnote_shape))
             else:
                 # This is not a footnote, so we're done
@@ -988,7 +988,7 @@ class XTypeFileReader:
 
         return symbol, size, shape, footnotes
 
-    def _read_header(self) -> Tuple[str, int, List[int]]:
+    def _read_type(self) -> Tuple[str, int, List[int]]:
         """
         Read a symbol and size information of an element from the xtype file.
 
@@ -1030,7 +1030,7 @@ class XTypeFileReader:
         # If we reach here, we've reached the end of the file
         return '', 0, []
 
-    def _read_object(self, object_info=None) -> Any:
+    def _read_object(self, object_header=None) -> Any:
         """
         Read an object from the file.
 
@@ -1038,10 +1038,10 @@ class XTypeFileReader:
             The Python object read from the file
         """
 
-        if object_info is None:
-            object_info = self._read_object_info()
+        if object_header is None:
+            object_header = self._read_header()
 
-        symbol, size, shape, footnotes = object_info
+        symbol, size, shape, footnotes = object_header
 
         if symbol in ('', ']', '}'):
             return (None, symbol)
@@ -1144,7 +1144,7 @@ class XTypeFileReader:
 
         # Parse each element until we hit a closing bracket
         while True:
-            symbol, size, shape = self._read_header()
+            symbol, size, shape = self._read_type()
 
             if symbol == ']':
                 # End of list
@@ -1175,7 +1175,7 @@ class XTypeFileReader:
         # Parse key-value pairs until we hit a closing brace
         while True:
             # Read the key
-            symbol, size, shape = self._read_header()
+            symbol, size, shape = self._read_type()
 
             if symbol == '}':
                 # End of dictionary
@@ -1211,7 +1211,7 @@ class XTypeFileReader:
                 raise ValueError(f"Unexpected key type in dictionary: {symbol}")
 
             # Read the value
-            symbol, size, shape = self._read_header()
+            symbol, size, shape = self._read_type()
 
             # We're reading a value
             if symbol in self.type_sizes:
@@ -1423,7 +1423,7 @@ class objPointer:
 
     fileEnd, listEnd, dictEnd = [(None, i) for i in ('',']','}')]
 
-    def __init__(self, file: File, position: int, symbol = None, size = 0, shape = [], footnotes = []):
+    def __init__(self, file: File, position: int = -1, symbol = None, size = 0, shape = [], footnotes = []):
         """
         Initialize an objPointer.
 
@@ -1435,13 +1435,16 @@ class objPointer:
         self.reader = file.reader
         self.writer = file.writer
 
-        # Move file pointer to the specified position
-        self.file.file.seek(position)
+        if position < 0:
+            position = self.file.file.tell()
+        else:
+            # Move file pointer to the specified position
+            self.file.file.seek(position)
         self.reader._pending_binary_size = size
 
         if symbol is None:
             # Read the object info (footnotes, type)
-            symbol, size, shape, footnotes = self.reader._read_object_info()
+            symbol, size, shape, footnotes = self.reader._read_header()
 
             # Save current position
             position = self.reader._getPos()
@@ -1454,7 +1457,7 @@ class objPointer:
         self.size = size
         self.shape = shape
         self.footnotes = footnotes
-        self.object_info = symbol, size, shape, footnotes
+        self.object_header = symbol, size, shape, footnotes
 
     def _reset_reading(self):
         # Move to the position of this object
@@ -1475,7 +1478,7 @@ class objPointer:
         self._reset_reading()
 
         # Read the object
-        result = self.reader._read_object(self.object_info)
+        result = self.reader._read_object(self.object_header)
 
         return result
 
@@ -1500,7 +1503,7 @@ class objPointer:
         # Read keys while skipping values
         keys = []
         while True:
-            key_symbol, key_size, key_shape = self.reader._read_header()
+            key_symbol, key_size, key_shape = self.reader._read_type()
 
             # Check if we've reached the end of the dictionary
             if key_symbol == '}':
@@ -1574,6 +1577,28 @@ class objPointer:
             # Not a list, dictionary, or array
             raise TypeError(f"Object of type '{self.symbol}' does not support len()")
 
+    def _get_item_value(self):
+        """
+        Determine whether to return an objPointer or a primitive value.
+
+        This helper method reads the next object header and decides based on the type:
+        - For containers (lists, dictionaries) and arrays: returns an objPointer
+        - For primitive types: reads and returns the actual object value directly
+
+        Returns:
+            Either an objPointer instance or a primitive value depending on the object type
+        """
+        # Peek at the next object information to determine its type
+        symbol, size, shape, footnotes = object_header = self.reader._read_header()
+
+        # Determine whether to return an objPointer or the actual value
+        if symbol in '[{' or (shape and (len(shape) > 1 or symbol not in 'sxu')):
+            # Container type or array - return objPointer
+            return objPointer(self.file, self.reader._getPos(False), symbol, size, shape, footnotes)
+        else:
+            # Primitive type - read and return directly
+            return self.reader._read_object(object_header)
+
     def _skip_object(self):
         """
         Skip over an object in the file.
@@ -1588,7 +1613,7 @@ class objPointer:
         symbol = '-'
         nestedCount = 0
         while nestedCount > 0 or symbol == '-':
-            next_symbol, size, shape = self.reader._read_header()
+            next_symbol, size, shape = self.reader._read_type()
             if next_symbol == '*':
                 # Skip over footnote content
                 self._skip_object()
@@ -1658,8 +1683,8 @@ class objPointer:
                         raise IndexError(f"List index {item} out of range, list has only {index} elements")
                     index += 1
 
-                # Create a new objPointer at the current position (pointing to the target element)
-                return objPointer(self.file, self.reader._getPos(True))
+                # Get the appropriate return value (objPointer or primitive)
+                return self._get_item_value()
 
             elif isinstance(item, slice):
                 # Slice indexing - handle start, stop, step
@@ -1723,7 +1748,7 @@ class objPointer:
             # Object is a dictionary - handle key-based lookup
             # Sequential scan through dictionary entries until we find the matching key
             while True:
-                key_symbol, key_size, key_shape = self.reader._read_header()
+                key_symbol, key_size, key_shape = self.reader._read_type()
 
                 # Check if we've reached the end of the dictionary without finding the key
                 if key_symbol == '}':
@@ -1735,8 +1760,8 @@ class objPointer:
                     key = self.reader._convert_to_deep_tuple(key)
 
                 if key == item:
-                    # Key found, return a new objPointer for the associated value
-                    return objPointer(self.file, self.reader._getPos(True))
+                    # Key found, get the appropriate return value (objPointer or primitive)
+                    return self._get_item_value()
                 else:
                     # Key doesn't match, skip the value and continue to next key-value pair
                     self._skip_object()

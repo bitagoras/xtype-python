@@ -76,7 +76,7 @@ with xtype.File(test_file, 'r') as xf:
 
     print("\n2.3 Access dictionary values by key:")
     # Get a specific dictionary key using __getitem__
-    text_value = xf["text"]()  # Call to convert to Python object
+    text_value = xf["text"][:]  # Call to convert to Python object
     print(f"Text value: {text_value}")
 
     print("\n2.4 Show list length without converting the elements:")
@@ -91,16 +91,16 @@ with xtype.File(test_file, 'r') as xf:
 
     # Navigate through nested structures
     print("Get sub-subitem:")
-    integer_value = xf["numeric_values"]["integer"]()
+    integer_value = xf["numeric_values"]["integer"]
     print(f"Integer value: {integer_value}")
-    float_value = xf["numeric_values"]["float"]()
+    float_value = xf["numeric_values"]["float"]
     print(f"Float value: {float_value}")
 
     print(f"\n2.6 Access list elements by index:")
     # Get specific list elements
-    hello_value = xf["text"][0]()
+    hello_value = xf["text"][0]
     print(f"First text item: {hello_value}")
-    world_value = xf["text"][1]()
+    world_value = xf["text"][1]
     print(f"Second text item: {world_value}")
 
     print("\n2.7 Basic array element access:")
@@ -136,7 +136,7 @@ with xtype.File(test_file, 'r') as xf:
 
     print("\n2.10 Navigate complex nested structures:")
     # Chain multiple navigation steps
-    nested_list_item = xf["basic_data_types"][3][1]()
+    nested_list_item = xf["basic_data_types"][3][1]
     print(f"Nested list item at basic_data_types[3][1]: {nested_list_item}")
     # Demonstrate step parameter in list slicing
     step_slice = xf["basic_data_types"][0:4:2]  # Get elements with step 2

@@ -138,6 +138,7 @@ xtype.File(filename: str, mode: str = 'r')
 - `keys()`: Return a list of keys if the root object is a dictionary
 - `__len__()`: Return the number of items in a list or dictionary, or the first dimension size of an array
 - `__getitem__(key)`: Access an element within the file (supports integer indexing, slicing, and dictionary key access)
+- `__setitem__(key, value)`: Assign a value to an element within the file (supports array assignment with integer indices, slices, and multi-dimensional indexing)
 
 
 ## Project Links

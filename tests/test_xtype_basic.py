@@ -56,15 +56,15 @@ class TestXTypeBasic(unittest.TestCase):
 
         # Test individual element access
         with xtype.File(self.temp_file.name, 'r') as xf:
-            self.assertEqual(xf["integer"](), 42)
-            self.assertEqual(xf["negative_int"](), -17)
-            self.assertEqual(xf["large_int"](), 9223372036854775807)
-            self.assertEqual(xf["float"](), 3.14159265359)
-            self.assertTrue(xf["boolean_true"]())
-            self.assertFalse(xf["boolean_false"]())
-            self.assertIsNone(xf["none_value"]())
-            self.assertEqual(xf["string"](), "Hello, world!")
-            self.assertEqual(xf["bytes"](), b"Binary data")
+            self.assertEqual(xf["integer"], 42)
+            self.assertEqual(xf["negative_int"], -17)
+            self.assertEqual(xf["large_int"], 9223372036854775807)
+            self.assertEqual(xf["float"], 3.14159265359)
+            self.assertTrue(xf["boolean_true"])
+            self.assertFalse(xf["boolean_false"])
+            self.assertIsNone(xf["none_value"])
+            self.assertEqual(xf["string"], "Hello, world!")
+            self.assertEqual(xf["bytes"], b"Binary data")
 
     def test_container_types(self):
         """Test serializing and deserializing container types (lists and dictionaries)."""
@@ -92,17 +92,17 @@ class TestXTypeBasic(unittest.TestCase):
         # Test list operations
         with xtype.File(self.temp_file.name, 'r') as xf:
             self.assertEqual(len(xf["list_of_ints"]), 5)
-            self.assertEqual(xf["list_of_ints"][0](), 1)
-            self.assertEqual(xf["list_of_ints"][4](), 5)
-            self.assertEqual(xf["nested_list"][1][1](), 3)
-            self.assertEqual(xf["nested_list"][2][1][1](), 6)
+            self.assertEqual(xf["list_of_ints"][0], 1)
+            self.assertEqual(xf["list_of_ints"][4], 5)
+            self.assertEqual(xf["nested_list"][1][1], 3)
+            self.assertEqual(xf["nested_list"][2][1][1], 6)
 
         # Test dict operations
         with xtype.File(self.temp_file.name, 'r') as xf:
             self.assertEqual(len(xf["simple_dict"]), 3)
-            self.assertEqual(xf["simple_dict"]["a"](), 1)
-            self.assertEqual(xf["simple_dict"]["c"](), 3)
-            self.assertEqual(xf["nested_dict"]["a"]["b"]["c"](), 42)
+            self.assertEqual(xf["simple_dict"]["a"], 1)
+            self.assertEqual(xf["simple_dict"]["c"], 3)
+            self.assertEqual(xf["nested_dict"]["a"]["b"]["c"], 42)
 
     def test_slicing(self):
         """Test list slicing operations."""
