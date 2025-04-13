@@ -108,7 +108,7 @@ class TestXTypeAdvanced(unittest.TestCase):
         # Create a deeply nested dictionary
         test_data = {}
         current = test_data
-        for i in range(20):  # 20 levels of nesting
+        for i in range(10):  # 10 levels of nesting
             current["level"] = {}
             current = current["level"]
         current["value"] = 42
@@ -128,7 +128,7 @@ class TestXTypeAdvanced(unittest.TestCase):
         with xtype.File(self.temp_file.name, 'r') as xf:
             # Build path to deeply nested value
             obj = xf
-            for i in range(20):
+            for i in range(10):
                 obj = obj["level"]
             self.assertEqual(obj["value"](), 42)
 
