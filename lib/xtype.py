@@ -245,6 +245,29 @@ class File:
         ptr = objPointer(self, 0)
         return len(ptr)
 
+    def __iter__(self):
+        """
+        Enable iteration over a File object by delegating to objPointer.__iter__.
+
+        Returns:
+            iterator: An iterator over the elements in the file
+
+        Raises:
+            TypeError: If the root object is not a list
+            IOError: If the file is not open for reading or not in read mode
+        """
+        if not self.file or self.file.closed:
+            raise IOError("File is not open for reading")
+
+        if self.mode not in 'ra':
+            raise IOError("File is not open in read mode")
+
+        # Create an objPointer at the beginning of the file
+        ptr = objPointer(self, 0)
+
+        # Delegate to the objPointer's __iter__ method
+        return iter(ptr)
+
 class XTypeFileWriter:
     """
     A class for writing Python data structures to files using the xtype binary format.
@@ -1924,6 +1947,70 @@ class objPointer:
 
             # Write the data
             self.file.file.write(binary_value)
+
+    def __iter__(self):
+        """
+        Enable iteration over an objPointer that points to a list.
+
+        Returns:
+            self: This instance as an iterator
+
+        Raises:
+            TypeError: If the object is not a list
+        """
+        # Store current position
+        self._iter_original_pos = self.reader._getPos()
+
+        # Move to the position of this object
+        self.reader._setPos(self.position)
+
+        # Check if object is a list
+        is_footnote = True
+        while is_footnote:
+            symbol, size, dimensions = self.reader._read_header()
+            if symbol == '*':
+                # Skip over footnote without reading its content
+                self.reader._read_object()
+            else:
+                is_footnote = False
+
+        if symbol != '[':
+            # Restore original position
+            self.reader._setPos(self._iter_original_pos)
+            raise TypeError(f"Object of type '{symbol}' is not iterable")
+
+        # Initialize iteration state
+        self._iter_index = 0
+        self._iter_done = False
+
+        return self
+
+    def __next__(self):
+        """
+        Return the next item in the iteration.
+
+        Returns:
+            Any: The next item in the list
+
+        Raises:
+            StopIteration: When the end of the list is reached
+        """
+        if self._iter_done:
+            # Reset file position to original position before raising StopIteration
+            self.reader._setPos(self._iter_original_pos)
+            raise StopIteration
+
+        # Otherwise, read the object and increment index
+        value = self.reader._read_object()
+        self._iter_index += 1
+
+        # If we're at the end of the list, stop iteration
+        if type(value) is tuple:
+            self._iter_done = True
+            self.reader._setPos(self._iter_original_pos)
+            raise StopIteration
+
+        return value
 
     def _handle_array_indexing(self, symbol, dimensions, item):
         """

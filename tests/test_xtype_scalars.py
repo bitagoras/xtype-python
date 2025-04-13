@@ -11,7 +11,7 @@ import unittest
 import numpy as np
 
 # Add the lib directory to the path to import xtype
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))) + "/lib")
+sys.path.append(os.path.dirname(os.path.abspath(__file__)) + "/lib")
 import xtype
 
 

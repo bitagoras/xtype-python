@@ -129,6 +129,11 @@ with xtype.File(test_file, 'r') as xf:
     # Len of array
     print(f'len(xf["basic_data_types"]): {len(xf["basic_data_types"])}')
 
+
+    print(f'\nIterate over xf["basic_data_types"]:')
+    for i, obj in enumerate(xf["basic_data_types"]):
+        print(f'  {i}: {obj}')
+
     print("\n2.10 Navigate complex nested structures:")
     # Chain multiple navigation steps
     nested_list_item = xf["basic_data_types"][3][1]()
@@ -224,5 +229,6 @@ with xtype.File(array_test_file, 'a') as xf:
     print("Write example: xf[\"array_4d\"][0, 0, 2, :] = 77")
     xf["array_4d"][0, 0, 2, :] = 77
     print("Read again:", xf["array_4d"][0, 0, 2, :])
+
 
 print("\nDemo completed successfully!")

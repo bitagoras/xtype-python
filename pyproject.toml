@@ -23,12 +23,7 @@ dependencies = ["numpy>=1.15.0"]
 Homepage = "https://github.com/bitagoras/xtype-python"
 BugTracker = "https://github.com/bitagoras/xtype-python/issues"
 
-[tool.pytest]
-testpaths = ["tests"]
-python_files = "test_*.py"
-python_classes = "Test*"
-python_functions = "test_*"
-
-[tool.pytest.ini_options]
-minversion = "6.0"
-addopts = "-v"
+[tool.unittest]
+discovery = true
+start-directory = "tests"
+pattern = "test_*.py"
