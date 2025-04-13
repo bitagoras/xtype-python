@@ -2003,6 +2003,38 @@ class objPointer:
             raise StopIteration
 
         return value
+        
+    def __repr__(self):
+        """
+        Return a string representation of the objPointer.
+        
+        For arrays, includes shape information.
+        For other types, shows the type symbol.
+        
+        Returns:
+            str: A string representation of the objPointer
+        """
+        # Type mapping for more readable output
+        type_names = {
+            'i': 'int8', 'j': 'int16', 'k': 'int32', 'l': 'int64',
+            'I': 'uint8', 'J': 'uint16', 'K': 'uint32', 'L': 'uint64',
+            'f': 'float32', 'd': 'float64',
+            'b': 'bool',
+            's': 'string', 'u': 'unicode', 'S': 'symbol',
+            'x': 'bytes',
+            '[': 'list', '{': 'dict',
+            'T': 'true', 'F': 'false', 'n': 'null'
+        }
+        
+        # Get a readable type name
+        type_name = type_names.get(self.symbol, self.symbol)
+        
+        # For arrays (has shape and not a string/bytes type with only 1 dimension)
+        if self.shape and (len(self.shape) > 1 or self.symbol not in 'sxu'):
+            return f"<objPointer type='{type_name}' shape={self.shape}>"
+        else:
+            return f"<objPointer type='{type_name}'>"
+
 
     def _handle_array_indexing(self, item):
         """

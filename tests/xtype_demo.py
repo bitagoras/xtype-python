@@ -230,5 +230,7 @@ with xtype.File(array_test_file, 'a') as xf:
     xf["array_4d"][0, 0, 2, :] = 77
     print("Read again:", xf["array_4d"][0, 0, 2, :])
 
+    print("Text representation:", xf["array_4d"])
+
 
 print("\nDemo completed successfully!")
