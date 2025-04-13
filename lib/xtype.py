@@ -1848,7 +1848,22 @@ class objPointer:
 
         # Use itertools.product to iterate over all combinations of indices
         # and assign the values accordingly
-        flat_value = value.flatten() if value.size > 1 else [value.item()] if value.size == 1 else []
+        flat_value = value.flatten() if hasattr(value, 'flatten') else np.array([value])
+
+        # Check if we're writing a scalar value (either a single element array or a repeated value)
+        is_scalar_assignment = (flat_value.size == 1 or np.isscalar(value))
+
+        # Create a copy of flat_value and apply byteswap if needed
+        if self.reader.need_byteswap:
+            # Make a copy and apply numpy's byteswap method
+            flat_value = flat_value.copy()
+            flat_value = flat_value.byteswap()
+
+        # For scalar values, prepare the byte sequence once
+        scalar_bytes = None
+        if is_scalar_assignment:
+            scalar_bytes = flat_value[0].tobytes()
+
         flat_index = 0
 
         # Determine if we should use chunk-based writing
@@ -1869,7 +1884,12 @@ class objPointer:
                 # Make sure we don't exceed the available values
                 elements_to_write = min(elements_per_chunk, flat_value.size - flat_index)
 
-                if elements_to_write <= 0:
+                if is_scalar_assignment:
+                    # Optimized scalar assignment - repeat the byte pattern to fill the chunk
+                    binary_value = scalar_bytes * elements_per_chunk
+                    # Trim to the correct length if needed (shouldn't exceed chunk_size)
+                    binary_value = binary_value[:chunk_size]
+                elif elements_to_write <= 0:
                     # Handle edge case where we're out of values but need to broadcast
                     if flat_value.size > 0:
                         # Broadcast the first value
@@ -1877,38 +1897,30 @@ class objPointer:
                         elements_to_write = elements_per_chunk
                     else:
                         raise ValueError("No values to assign")
+                    # Write the chunk in binary form (byte swapping already applied if needed)
+                    binary_value = chunk_values.tobytes()
                 else:
                     # Get the chunk of values to write
                     chunk_values = flat_value[flat_index:flat_index + elements_to_write]
                     flat_index += elements_to_write
-
-                # Write the chunk in binary form with proper byte order
-                binary_value = chunk_values.tobytes()
-                if self.reader.need_byteswap:
-                    # This needs to handle the whole chunk properly
-                    # For simplicity, we can swap the bytes of each element individually
-                    swapped_value = bytearray()
-                    for i in range(0, len(binary_value), element_size):
-                        element_bytes = binary_value[i:i+element_size]
-                        swapped_value.extend(element_bytes[::-1])
-                    binary_value = bytes(swapped_value)
+                    # Write the chunk in binary form (byte swapping already applied if needed)
+                    binary_value = chunk_values.tobytes()
             else:
                 # Single element writing (original approach)
-                if flat_value.size > 0:
+                if is_scalar_assignment:
+                    # For scalar assignments, we already have the bytes ready
+                    binary_value = scalar_bytes
+                elif flat_value.size > 0:
                     if flat_index < flat_value.size:
                         val_to_write = flat_value[flat_index]
                         flat_index += 1
                     else:
                         # In case we're broadcasting a single value
                         val_to_write = flat_value[0]
+                    # Write the value in binary form (byte swapping already applied if needed)
+                    binary_value = val_to_write.tobytes()
                 else:
                     raise ValueError("No values to assign")
-
-                # Write the value in binary form with proper byte order
-                binary_value = val_to_write.tobytes()
-                if self.reader.need_byteswap:
-                    # Swap bytes if needed for endianness
-                    binary_value = binary_value[::-1]
 
             # Write the data
             self.file.file.write(binary_value)

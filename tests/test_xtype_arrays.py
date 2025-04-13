@@ -29,6 +29,21 @@ class TestXTypeArrays(unittest.TestCase):
         if os.path.exists(self.temp_file.name):
             os.unlink(self.temp_file.name)
 
+    def create_test_file_with_arrays(self):
+        """Helper method to create a test file with various arrays."""
+        test_data = {
+            "array_1d": np.arange(10, dtype=np.int32),
+            "array_2d": np.reshape(np.arange(12, dtype=np.float32), (3, 4)),
+            "array_3d": np.reshape(np.arange(24, dtype=np.int16), (2, 3, 4)),
+            "array_4d": np.reshape(np.arange(120, dtype=np.int8), (2, 3, 4, 5))
+        }
+
+        # Write data to file
+        with xtype.File(self.temp_file.name, 'w') as xf:
+            xf.write(test_data)
+
+        return test_data
+
     def test_1d_arrays(self):
         """Test serializing and deserializing 1D NumPy arrays of different types."""
         test_data = {
@@ -195,6 +210,172 @@ class TestXTypeArrays(unittest.TestCase):
             # Type errors
             with self.assertRaises(TypeError):
                 xf["array_3d"]["invalid"]  # Invalid index type
+
+    def test_array_setitem_single_element(self):
+        """Test setting individual elements in arrays using __setitem__."""
+        original_data = self.create_test_file_with_arrays()
+
+        with xtype.File(self.temp_file.name, 'a') as xf:
+            # Set single elements in 1D array
+            xf["array_1d"][2] = 99
+            xf["array_1d"][5] = 42
+
+            # Set single elements in 2D array
+            xf["array_2d"][1, 2] = 100.5
+            xf["array_2d"][2, 3] = -10.75
+
+            # Set single elements in 3D array
+            xf["array_3d"][0, 1, 2] = 999
+            xf["array_3d"][1, 2, 3] = -888
+
+            # Set single elements in 4D array
+            xf["array_4d"][1, 0, 2, 3] = 123
+            xf["array_4d"][0, 2, 1, 4] = -123
+
+        # Read modified data and check values
+        with xtype.File(self.temp_file.name, 'r') as xf:
+            # Check 1D array modifications
+            self.assertEqual(xf["array_1d"][2], 99)
+            self.assertEqual(xf["array_1d"][5], 42)
+            self.assertEqual(xf["array_1d"][0], original_data["array_1d"][0])
+
+            # Check 2D array modifications
+            self.assertEqual(xf["array_2d"][1, 2], 100.5)
+            self.assertEqual(xf["array_2d"][2, 3], -10.75)
+            self.assertEqual(xf["array_2d"][0, 0], original_data["array_2d"][0, 0])
+
+            # Check 3D array modifications
+            self.assertEqual(xf["array_3d"][0, 1, 2], 999)
+            self.assertEqual(xf["array_3d"][1, 2, 3], -888)
+            self.assertEqual(xf["array_3d"][0, 0, 0], original_data["array_3d"][0, 0, 0])
+
+            # Check 4D array modifications
+            self.assertEqual(xf["array_4d"][1, 0, 2, 3], 123)
+            self.assertEqual(xf["array_4d"][0, 2, 1, 4], -123)
+            self.assertEqual(xf["array_4d"][0, 0, 0, 0], original_data["array_4d"][0, 0, 0, 0])
+
+    def test_array_setitem_slices(self):
+        """Test setting slices of arrays using __setitem__."""
+        self.create_test_file_with_arrays()
+
+        with xtype.File(self.temp_file.name, 'a') as xf:
+            # Modify slices in 1D array
+            xf["array_1d"][2:5] = np.array([50, 51, 52])
+            xf["array_1d"][:2] = np.array([90, 91])
+
+            # Modify slices in 2D array
+            xf["array_2d"][0, :] = np.array([25.5, 26.5, 27.5, 28.5], dtype=np.float32)
+            xf["array_2d"][1:, 2] = np.array([31.5, 32.5], dtype=np.float32)  # Fixed overlapping indices
+
+            # Modify slices in 3D array
+            xf["array_3d"][0, 1, :] = np.array([111, 222, 333, 444], dtype=np.int16)
+            xf["array_3d"][1, :, 2] = np.array([555, 666, 777], dtype=np.int16)
+
+            # Modify slices in 4D array
+            xf["array_4d"][0, 1, 2, :] = np.array([60, 61, 62, 63, 64], dtype=np.int8)
+            xf["array_4d"][1, :, 0, 1] = np.array([70, 71, 72], dtype=np.int8)
+
+        # Verify the changes
+        with xtype.File(self.temp_file.name, 'r') as xf:
+            # Check 1D array modifications
+            np.testing.assert_array_equal(xf["array_1d"][2:5], np.array([50, 51, 52]))
+            np.testing.assert_array_equal(xf["array_1d"][:2], np.array([90, 91]))
+
+            # Check 2D array modifications
+            np.testing.assert_array_equal(xf["array_2d"][0, :], np.array([25.5, 26.5, 27.5, 28.5], dtype=np.float32))
+            np.testing.assert_array_equal(xf["array_2d"][1:, 2], np.array([31.5, 32.5], dtype=np.float32))  # Fixed verification
+
+            # Check 3D array modifications
+            np.testing.assert_array_equal(xf["array_3d"][0, 1, :], np.array([111, 222, 333, 444], dtype=np.int16))
+            np.testing.assert_array_equal(xf["array_3d"][1, :, 2], np.array([555, 666, 777], dtype=np.int16))
+
+            # Check 4D array modifications
+            np.testing.assert_array_equal(xf["array_4d"][0, 1, 2, :], np.array([60, 61, 62, 63, 64], dtype=np.int8))
+            np.testing.assert_array_equal(xf["array_4d"][1, :, 0, 1], np.array([70, 71, 72], dtype=np.int8))
+
+    def test_array_setitem_scalar_broadcast(self):
+        """Test setting scalar values to array sections (broadcasting)."""
+        self.create_test_file_with_arrays()
+
+        with xtype.File(self.temp_file.name, 'a') as xf:
+            # Broadcast to 1D slices
+            xf["array_1d"][3:7] = 42
+
+            # Broadcast to 2D slices
+            xf["array_2d"][1:3, 1:3] = 99.5
+
+            # Broadcast to 3D slices
+            xf["array_3d"][0, :, :] = 123
+
+            # Broadcast to 4D slices
+            xf["array_4d"][:, :, 2, :] = 77
+
+        # Verify the changes
+        with xtype.File(self.temp_file.name, 'r') as xf:
+            # Check 1D array broadcast
+            np.testing.assert_array_equal(xf["array_1d"][3:7], np.full(4, 42))
+
+            # Check 2D array broadcast
+            np.testing.assert_array_equal(xf["array_2d"][1:3, 1:3], np.full((2, 2), 99.5))
+
+            # Check 3D array broadcast
+            np.testing.assert_array_equal(xf["array_3d"][0, :, :], np.full((3, 4), 123))
+
+            # Check 4D array broadcast
+            np.testing.assert_array_equal(xf["array_4d"][:, :, 2, :], np.full((2, 3, 5), 77))
+
+    def test_array_setitem_advanced_indexing(self):
+        """Test setting values with more complex indexing."""
+        self.create_test_file_with_arrays()
+
+        with xtype.File(self.temp_file.name, 'a') as xf:
+            # Set non-contiguous elements in 1D array
+            xf["array_1d"][[0, 2, 5, 8]] = np.array([100, 101, 102, 103])
+
+            # Test assigning the same value to multiple indices
+            xf["array_1d"][[1, 3, 7, 9]] = 55
+
+            # Mixed indexing in 2D arrays
+            xf["array_2d"][:2, [0, 2]] = np.array([[11.1, 22.2], [33.3, 44.4]], dtype=np.float32)
+
+            # Negative indexing
+            xf["array_3d"][0, -1, 1:-1] = np.array([500, 501], dtype=np.int16)
+
+        # Verify the changes
+        with xtype.File(self.temp_file.name, 'r') as xf:
+            # Check non-contiguous 1D indexing
+            np.testing.assert_array_equal(xf["array_1d"][[0, 2, 5, 8]], np.array([100, 101, 102, 103]))
+
+            # Check broadcast to multiple indices
+            np.testing.assert_array_equal(xf["array_1d"][[1, 3, 7, 9]], np.array([55, 55, 55, 55]))
+
+            # Check mixed indexing
+            np.testing.assert_approx_equal(np.sum(np.abs(xf["array_2d"][:2, [0, 2]])), np.sum(np.abs(np.array([[11.1, 22.2], [33.3, 44.4]]))))
+
+            # Check negative indexing
+            np.testing.assert_array_equal(xf["array_3d"][0, -1, 1:-1], np.array([500, 501]))
+
+    def test_array_setitem_error_cases(self):
+        """Test error conditions for array __setitem__ operations."""
+        self.create_test_file_with_arrays()
+
+        with xtype.File(self.temp_file.name, 'a') as xf:
+            # Shape mismatch
+            with self.assertRaises(ValueError):
+                xf["array_1d"][2:5] = np.array([1, 2])  # Wrong number of elements
+
+            # Dtype mismatch (int array to float array)
+            with self.assertRaises(ValueError):
+                # Try to assign int64 array to float32 array
+                xf["array_2d"][1, :] = np.array([1, 2, 3, 4], dtype=np.int64)
+
+            # Index out of bounds
+            with self.assertRaises(IndexError):
+                xf["array_1d"][20] = 42
+
+            # Too many indices
+            with self.assertRaises(IndexError):
+                xf["array_2d"][1, 2, 3] = 100
 
 
 if __name__ == '__main__':

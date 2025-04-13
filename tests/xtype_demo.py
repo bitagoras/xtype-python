@@ -217,8 +217,12 @@ with xtype.File(array_test_file, 'a') as xf:
     print(f"Values: \n{subset7}")
 
     print("\n3.9 Negative indices in slices:")
-    print("Write example: [61,62,63,64,65,66]")
+    print("Write example: xf[\"array_4d\"][0, 0, 1, :] = [61,62,63,64,65,66]")
     xf["array_4d"][0, 0, 1, :] = [61,62,63,64,65,66]
     print("Read again:", xf["array_4d"][0, 0, 1, :])
+
+    print("Write example: xf[\"array_4d\"][0, 0, 2, :] = 77")
+    xf["array_4d"][0, 0, 2, :] = 77
+    print("Read again:", xf["array_4d"][0, 0, 2, :])
 
 print("\nDemo completed successfully!")
