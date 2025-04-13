@@ -19,7 +19,7 @@ License: MIT
 Project: https://github.com/bitagoras/xtype-python
 """
 
-__version__ = "0.3.2"
+__version__ = "0.4.0"
 
 import struct
 import numpy as np
@@ -67,7 +67,7 @@ class File:
 
         Args:
             filename: Path to the file
-            mode: File mode ('w' for write, 'r' for read)
+            mode: File mode ('w' for write, 'r' for read, 'a' for append/read+write)
             byteorder: The byte order of multi-byte integers in the file.
                        'big', 'little' or 'auto'. Defaults to 'auto'.
                        'auto' selects the systems byte order for writing
@@ -99,6 +99,10 @@ class File:
         elif self.mode == 'r':
             self.file = open(self.filename, 'rb')
             self.reader = XTypeFileReader(self.file, byteorder=self.byteorder)
+        elif self.mode == 'a':
+            self.file = open(self.filename, 'r+b')
+            self.reader = XTypeFileReader(self.file, byteorder=self.byteorder)
+            self.writer = XTypeFileWriter(self.file, byteorder=self.byteorder)
         else:
             raise ValueError(f"Unsupported mode: {self.mode}")
 
@@ -173,7 +177,7 @@ class File:
         if not self.file or self.file.closed:
             raise IOError("File is not open for reading")
 
-        if self.mode != 'r':
+        if self.mode not in 'ra':
             raise IOError("File is not open in read mode")
 
         # Create an objPointer at the beginning of the file
@@ -603,7 +607,7 @@ class XTypeFileReader:
         'k': np.int32,     # 32-bit signed integer
         'l': np.int64,     # 64-bit signed integer
         'I': np.uint8,     # 8-bit unsigned integer
-        'x': np.uint8,     # Raw bytes are treated as 8-bit unsigned integers
+        'x': np.uint8,     # Raw bytes are treated as bytes or 8-bit unsigned integers
         'J': np.uint16,    # 16-bit unsigned integer
         'K': np.uint32,    # 32-bit unsigned integer
         'L': np.uint64,    # 64-bit unsigned integer
@@ -687,7 +691,7 @@ class XTypeFileReader:
         data = self._read_object()
         if type(data) is tuple:
             data = None
-        return
+        return data
 
     def read_debug(self, indent_size: int = 2, max_indent_level: int = 10, max_binary_bytes: int = 15) -> Iterator[str]:
         """
@@ -1729,239 +1733,321 @@ class objPointer:
                     self._skip_object()
 
         elif dimensions and (len(dimensions) > 1 or symbol not in 'sxu'):
-            # Object is an array - handle direct binary reading with efficient random access
-            # This provides O(1) access to array elements regardless of position
-
-            # Get element type information
-            element_type = symbol  # The type code for array elements (i, f, d, etc.)
-            element_size = self.reader.type_sizes[element_type]  # Size in bytes for each element
+            # Get the current file position as the data start position
             data_start_pos = self.file.file.tell()  # Position where the actual array data begins
+            # Call the helper method for array handling to prepare variables
+            dtype, index_arrays, result_shape, chunk_size, strides, element_size = \
+                    self._handle_array_indexing(symbol, dimensions, item)
 
-            # Map the xtype type code to the corresponding NumPy dtype
-            if element_type not in self.reader.dtype_map:
-                raise ValueError(f"Unsupported NumPy type: {element_type}")
+            # Handle empty arrays
+            if any(len(arr) == 0 for arr in index_arrays):
+                return np.array([], dtype=dtype).reshape(result_shape)
 
-            dtype = self.reader.dtype_map[element_type]
+            # Use itertools.product to iterate over all combinations of indices
+            binary_data = []
+            for indices in itertools.product(*index_arrays):
+                # Calculate byte offset for this element using the original element size
+                # The strides are based on dimension counts, not bytes
+                offset = sum(idx * stride * element_size
+                          for idx, stride in zip(indices, strides))
 
-            # Normalize indexing to handle both single indices and tuples consistently
-            if not isinstance(item, tuple):
-                item_indices = (item,)  # Convert single index to a 1-tuple
-            else:
-                item_indices = item     # Use the tuple as is
+                # Seek to the position of this element and read the data
+                self.file.file.seek(data_start_pos + offset)
+                element_bytes = self.file.file.read(chunk_size)
 
-            # Validate that we don't have more indices than dimensions
-            if len(item_indices) > len(dimensions):
-                raise IndexError(f"Too many indices for array with shape {dimensions}")
+                # Ensure we read the expected number of bytes - this could fail at EOF or with corrupted files
+                assert len(element_bytes) == chunk_size
+                binary_data.append(element_bytes)
 
-            # Calculate strides (elements to skip for each dimension)
-            # Last dimension stride is 1 element
-            strides = [1]
-            for dim_size in reversed(dimensions[1:]):
-                strides.insert(0, strides[0] * dim_size)
+            # Combine all binary data into a single buffer
+            binary_buffer = b''.join(binary_data)
 
-            # Process each index: convert integers to slices/tuples for iteration
-            # This will store the final shape of our result
-            result_shape = []
-            # This will store the indices to access for each dimension
-            index_arrays = []
-            # This will store slice information (step, start, length) for each dimension
-            slice_info = []
+            # Create numpy array from binary data with the correct shape and dtype
+            result = np.frombuffer(binary_buffer, dtype=dtype)
 
-            # Process each dimension's index specification
-            for i, (idx, dim_size) in enumerate(zip(item_indices, dimensions)):
-                if isinstance(idx, int):
-                    # Single index: convert to a single-element tuple for iteration
-                    if idx < 0:
-                        idx += dim_size  # Handle negative indexing
-                    if idx < 0 or idx >= dim_size:
-                        raise IndexError(f"Index {idx} out of bounds for dimension {i} with size {dim_size}")
-                    index_arrays.append((idx,))  # No dimension in result shape (selecting single element)
-                    slice_info.append((0, 0, 0))  # Not a slice
-                elif isinstance(idx, slice):
-                    # Slice: extract indices and create array
-                    start, stop, step = idx.indices(dim_size)
-                    indices = range(start, stop, step)
-                    index_arrays.append(indices)
-                    result_shape.append(len(indices))  # Add dimension to result shape
-                    slice_info.append((step, start, len(indices) if len(indices)!=dim_size else -1))  # Store slice parameters
-                elif isinstance(idx, (list, np.ndarray)):
-                    # List or numpy array: use directly as indices
-                    indices = []
-                    for j in idx:
-                        if isinstance(j, int):
-                            if j < 0:
-                                j += dim_size  # Handle negative indexing
-                            if j < 0 or j >= dim_size:
-                                raise IndexError(f"Index {j} out of bounds for dimension {i} with size {dim_size}")
-                            indices.append(j)
-                        else:
-                            raise TypeError(f"Indices must be integers, not {type(j).__name__}")
-                    index_arrays.append(indices)
-                    result_shape.append(len(indices))  # Add dimension to result shape
-                else:
-                    raise TypeError(f"Invalid index type: {type(idx).__name__}")
+            # Reshape to match the dimensions of our result
+            if result_shape:  # If we have dimensions, reshape; otherwise leave as 1D
+                result = result.reshape(result_shape)
 
-            chunk_size = element_size
-
-            # Optimize by identifying full range slices with (1,0,-1) from the end
-            full_range_count = 0
-            for i in range(len(slice_info) - 1, -1, -1):
-                if slice_info[i] == (1,0,-1):
-                    full_range_count += 1
-                else:
-                    break
-
-            # Reduce all 3 list variables by removing full range slices
-            if full_range_count > 0:
-                slice_info = slice_info[:-full_range_count]
-                index_arrays = index_arrays[:-full_range_count]
-                result_shape = result_shape[:-full_range_count]
-
-            # Check if the last remaining slice has step 1
-            if slice_info and slice_info[-1][0] == 1:  # step == 1
-                step, start, length = slice_info[-1]
-                # Replace the last index_arrays element with just the start value
-                # and increase chunk_size by the length factor
-                if length > 0:  # Make sure length is valid
-                    index_arrays[-1] = (start,)
-                    chunk_size *= length
-
-            # For any remaining dimensions not specified in item_indices,
-            # instead of creating full slices, increase the element_size to read data in larger chunks
-            if len(index_arrays) < len(dimensions):
-                # Calculate how much to increase element_size by multiplying by the sizes of all remaining dimensions
-                remaining_dimensions_size = 1
-                for i in range(len(index_arrays), len(dimensions)):
-                    remaining_dimensions_size *= dimensions[i]
-                    result_shape.append(dimensions[i])  # Add dimension to result shape
-
-                # Increase chunk_size to read all data for remaining dimensions at once
-                chunk_size *= remaining_dimensions_size
-
-            if len(index_arrays) == 0:
-                index_arrays = [(0,)]
-
-            # Create an ArraySubset that will convert to an array when called
-            # For empty results, index_arrays will be empty and will be handled in __call__
-            return ArraySubset(
-                file=self.file,
-                reader=self.reader,
-                element_type=element_type,
-                element_size=element_size,
-                data_start_pos=data_start_pos,
-                index_arrays=[] if any(len(arr) == 0 for arr in index_arrays) else index_arrays,
-                strides=strides,
-                result_shape=result_shape,
-                chunk_size=chunk_size,
-                dtype=dtype
-            )
+            # Correct the endianness if needed
+            if self.reader.need_byteswap:
+                result = result.byteswap()
+            return result
         else:
             # Object is a singular type (int, float, str, etc.) which doesn't support indexing
             # This includes primitive types like integers, floats, strings, etc.
             raise TypeError(f"Object of type '{symbol}' does not support indexing")
 
-
-class ArraySubset:
-    """
-    A class that represents a subset of an array in an xtype file.
-
-    This class provides lazy loading of array data, only reading from the file
-    when the data is explicitly requested via the __call__ method.
-    """
-
-    def __init__(self, file, reader, element_type, element_size, data_start_pos,
-                 index_arrays, strides, result_shape, chunk_size, dtype):
+    def __setitem__(self, item, value):
         """
-        Initialize an ArraySubset.
+        Assign a value to a sub-element within the object using indexing operations.
+
+        This method provides array assignment operations, allowing for:
+        - Single element assignment with integer indices
+        - Sub-array assignment with slices
+        - Assignment to non-contiguous selections with list/array indexing
+        - Multi-dimensional indexing with tuples
 
         Args:
-            file: The xtype.File object
-            reader: The XTypeFileReader object
-            element_type: The type code for array elements
-            element_size: Size in bytes for each element
-            data_start_pos: Position where the actual array data begins
-            index_arrays: Arrays of indices to access for each dimension
-            strides: Elements to skip for each dimension
-            result_shape: The final shape of the result
-            chunk_size: Size of each chunk to read
-            dtype: NumPy dtype for the array elements
-        """
-        self.file = file
-        self.reader = reader
-        self.element_type = element_type
-        self.element_size = element_size
-        self.data_start_pos = data_start_pos
-        self.index_arrays = index_arrays
-        self.strides = strides
-        self.result_shape = result_shape
-        self.chunk_size = chunk_size
-        self.dtype = dtype
+            item: The index specifier, which can be:
+                - Integer index (for arrays)
+                - Slice object (for arrays)
+                - List/array of indices (for arrays)
+                - Tuple of indices/slices/lists (for multi-dimensional arrays)
+            value: The value to assign, must be compatible with the target's dtype and shape
 
-    def __call__(self):
+        Raises:
+            IndexError: If the index is out of bounds
+            TypeError: If the object does not support assignment or index type is invalid
+            ValueError: If shape or dtype mismatch between value and target
         """
-        Convert the array subset to a NumPy array.
+        # Store current position to restore it later if needed
+        self.reader._setPos(self.position)
 
-        Returns:
-            np.ndarray: The NumPy array representation of this subset
-        """
-        # Handle empty arrays
-        if not self.index_arrays:
-            return np.array([], dtype=self.dtype).reshape(self.result_shape)
+        # Re-read the object type and handle footnotes
+        is_footnote = True
+        while is_footnote:
+            symbol, size, dimensions = self.reader._read_header()
+            if symbol == '*':
+                # Skip over footnote without reading its content
+                self.reader._read_object()
+            else:
+                is_footnote = False
+
+        # Currently only array assignments are supported
+        if not dimensions or (len(dimensions) <= 1 and symbol in 'sxu'):
+            raise TypeError(f"Object of type '{symbol}' does not support item assignment")
+
+        # Get the current file position as the data start position
+        data_start_pos = self.file.file.tell()  # Position where the actual array data begins
+
+        # Call the helper method for array handling to prepare variables
+        dtype, index_arrays, result_shape, chunk_size, strides, element_size = \
+                self._handle_array_indexing(symbol, dimensions, item)
+
+        # Convert value to numpy array if it's not already one
+        if not isinstance(value, np.ndarray):
+            # If scalar value, convert to array with result_shape
+            value = np.array(value, dtype=dtype)
+            if result_shape and value.size == 1 and value.ndim == 0:
+                # For scalar assignment to array subset, broadcast to the required shape
+                value = np.full(result_shape, value.item(), dtype=dtype)
+
+        # Check dtype compatibility
+        if value.dtype != dtype:
+            raise ValueError(f"Dtype mismatch: trying to assign {value.dtype} to array with dtype {dtype}")
+
+        # Check shape compatibility
+        if result_shape and value.shape != tuple(result_shape):
+            raise ValueError(f"Shape mismatch: trying to assign array with shape {value.shape} to slice with shape {tuple(result_shape)}")
+
+        # Make sure the file is in append mode to allow writing
+        current_mode = self.file.file.mode
+        if 'a' not in current_mode and '+' not in current_mode:
+            raise IOError("File must be opened in append mode ('a') for array assignment operations")
 
         # Use itertools.product to iterate over all combinations of indices
-        binary_data = []
-        for indices in itertools.product(*self.index_arrays):
+        # and assign the values accordingly
+        flat_value = value.flatten() if value.size > 1 else [value.item()] if value.size == 1 else []
+        flat_index = 0
+
+        # Determine if we should use chunk-based writing
+        elements_per_chunk = chunk_size // element_size
+        use_chunks = elements_per_chunk > 1
+
+        for indices in itertools.product(*index_arrays):
             # Calculate byte offset for this element using the original element size
             # The strides are based on dimension counts, not bytes
-            offset = sum(idx * stride * self.element_size
-                         for idx, stride in zip(indices, self.strides))
+            offset = sum(idx * stride * element_size
+                      for idx, stride in zip(indices, strides))
 
-            # Seek to the position of this element and read the data
-            self.file.file.seek(self.data_start_pos + offset)
-            element_bytes = self.file.file.read(self.chunk_size)
+            # Seek to the position of this element
+            self.file.file.seek(data_start_pos + offset)
 
-            # Ensure we read the expected number of bytes - this could fail at EOF or with corrupted files
-            assert len(element_bytes) == self.chunk_size
-            binary_data.append(element_bytes)
+            # Handle writing based on chunk size
+            if use_chunks:
+                # Make sure we don't exceed the available values
+                elements_to_write = min(elements_per_chunk, flat_value.size - flat_index)
 
-        # Combine all binary data into a single buffer
-        binary_buffer = b''.join(binary_data)
+                if elements_to_write <= 0:
+                    # Handle edge case where we're out of values but need to broadcast
+                    if flat_value.size > 0:
+                        # Broadcast the first value
+                        chunk_values = np.full(elements_per_chunk, flat_value[0], dtype=dtype)
+                        elements_to_write = elements_per_chunk
+                    else:
+                        raise ValueError("No values to assign")
+                else:
+                    # Get the chunk of values to write
+                    chunk_values = flat_value[flat_index:flat_index + elements_to_write]
+                    flat_index += elements_to_write
 
-        # Create numpy array from binary data with the correct shape and dtype
-        result = np.frombuffer(binary_buffer, dtype=self.dtype)
+                # Write the chunk in binary form with proper byte order
+                binary_value = chunk_values.tobytes()
+                if self.reader.need_byteswap:
+                    # This needs to handle the whole chunk properly
+                    # For simplicity, we can swap the bytes of each element individually
+                    swapped_value = bytearray()
+                    for i in range(0, len(binary_value), element_size):
+                        element_bytes = binary_value[i:i+element_size]
+                        swapped_value.extend(element_bytes[::-1])
+                    binary_value = bytes(swapped_value)
+            else:
+                # Single element writing (original approach)
+                if flat_value.size > 0:
+                    if flat_index < flat_value.size:
+                        val_to_write = flat_value[flat_index]
+                        flat_index += 1
+                    else:
+                        # In case we're broadcasting a single value
+                        val_to_write = flat_value[0]
+                else:
+                    raise ValueError("No values to assign")
 
-        # Reshape to match the dimensions of our result
-        if self.result_shape:  # If we have dimensions, reshape; otherwise leave as 1D
-            result = result.reshape(self.result_shape)
+                # Write the value in binary form with proper byte order
+                binary_value = val_to_write.tobytes()
+                if self.reader.need_byteswap:
+                    # Swap bytes if needed for endianness
+                    binary_value = binary_value[::-1]
 
-        # Correct the endianness if needed
-        if self.reader.need_byteswap:
-            result = result.byteswap()
-        return result
+            # Write the data
+            self.file.file.write(binary_value)
 
-    def __len__(self):
+    def _handle_array_indexing(self, symbol, dimensions, item):
         """
-        Return the length of the first dimension of the array.
+        Prepare variables for array indexing operations.
 
-        Returns:
-            int: The length of the first dimension
-        """
-        if not self.result_shape:
-            return 0
-        return self.result_shape[0]
-
-    def __getitem__(self, item):
-        """
-        Allow further slicing of the array subset.
-        This creates a new ArraySubset representing a view into this one.
-        For simplicity, we just convert to numpy and then slice.
+        This method handles the preparation logic for array indexing including:
+        - Processing various index types (int, slice, list, numpy array)
+        - Calculating strides and shapes
+        - Optimizing access patterns for different slice types
 
         Args:
-            item: The index or slice to access
+            symbol: The type code for array elements (i, f, d, etc.)
+            dimensions: The dimensions of the array
+            item: The index specifier (int, slice, list, numpy array, or tuple)
 
         Returns:
-            ArraySubset or Any: A new ArraySubset or a single value
-        """
-        # Convert to numpy and then use numpy's indexing
-        return self()[item]
+            Tuple containing:
+                - dtype: NumPy data type for the array elements
+                - index_arrays: List of index arrays for each dimension
+                - result_shape: Shape of the resulting array
+                - chunk_size: Size in bytes for each chunk to read
+                - strides: List of stride values for each dimension
+                - element_size: Size in bytes for each element
 
+        Raises:
+            IndexError: If the index is out of bounds
+            TypeError: If the index type is invalid
+            ValueError: If an unsupported array type is encountered
+        """
+        # Get element type information
+        element_type = symbol  # The type code for array elements (i, f, d, etc.)
+        element_size = self.reader.type_sizes[element_type]  # Size in bytes for each element
+
+        # Map the xtype type code to the corresponding NumPy dtype
+        if element_type not in self.reader.dtype_map:
+            raise ValueError(f"Unsupported NumPy type: {element_type}")
+
+        dtype = self.reader.dtype_map[element_type]
+
+        # Normalize indexing to handle both single indices and tuples consistently
+        if not isinstance(item, tuple):
+            item_indices = (item,)  # Convert single index to a 1-tuple
+        else:
+            item_indices = item     # Use the tuple as is
+
+        # Validate that we don't have more indices than dimensions
+        if len(item_indices) > len(dimensions):
+            raise IndexError(f"Too many indices for array with shape {dimensions}")
+
+        # Calculate strides (elements to skip for each dimension)
+        # Last dimension stride is 1 element
+        strides = [1]
+        for dim_size in reversed(dimensions[1:]):
+            strides.insert(0, strides[0] * dim_size)
+
+        # Process each index: convert integers to slices/tuples for iteration
+        # This will store the final shape of our result
+        result_shape = []
+        # This will store the indices to access for each dimension
+        index_arrays = []
+        # This will store slice information (step, start, length) for each dimension
+        slice_info = []
+
+        # Process each dimension's index specification
+        for i, (idx, dim_size) in enumerate(zip(item_indices, dimensions)):
+            if isinstance(idx, int):
+                # Single index: convert to a single-element tuple for iteration
+                if idx < 0:
+                    idx += dim_size  # Handle negative indexing
+                if idx < 0 or idx >= dim_size:
+                    raise IndexError(f"Index {idx} out of bounds for dimension {i} with size {dim_size}")
+                index_arrays.append((idx,))  # No dimension in result shape (selecting single element)
+                slice_info.append((0, 0, 0))  # Not a slice
+            elif isinstance(idx, slice):
+                # Slice: extract indices and create array
+                start, stop, step = idx.indices(dim_size)
+                indices = range(start, stop, step)
+                index_arrays.append(indices)
+                result_shape.append(len(indices))  # Add dimension to result shape
+                slice_info.append((step, start, len(indices) if len(indices)!=dim_size else -1))  # Store slice parameters
+            elif isinstance(idx, (list, np.ndarray)):
+                # List or numpy array: use directly as indices
+                indices = []
+                for j in idx:
+                    if isinstance(j, int):
+                        if j < 0:
+                            j += dim_size  # Handle negative indexing
+                        if j < 0 or j >= dim_size:
+                            raise IndexError(f"Index {j} out of bounds for dimension {i} with size {dim_size}")
+                        indices.append(j)
+                    else:
+                        raise TypeError(f"Indices must be integers, not {type(j).__name__}")
+                index_arrays.append(indices)
+                result_shape.append(len(indices))  # Add dimension to result shape
+            else:
+                raise TypeError(f"Invalid index type: {type(idx).__name__}")
+
+        chunk_size = element_size
+
+        # Optimize by identifying full range slices with (1,0,-1) from the end
+        full_range_count = 0
+        for i in range(len(slice_info) - 1, -1, -1):
+            if slice_info[i] == (1,0,-1):
+                full_range_count += 1
+            else:
+                break
+
+        # Reduce all 3 list variables by removing full range slices
+        if full_range_count > 0:
+            slice_info = slice_info[:-full_range_count]
+            index_arrays = index_arrays[:-full_range_count]
+            result_shape = result_shape[:-full_range_count]
+
+        # Check if the last remaining slice has step 1
+        if slice_info and slice_info[-1][0] == 1:  # step == 1
+            step, start, length = slice_info[-1]
+            # Replace the last index_arrays element with just the start value
+            # and increase chunk_size by the length factor
+            if length > 0:  # Make sure length is valid
+                index_arrays[-1] = (start,)
+                chunk_size *= length
+
+        # For any remaining dimensions not specified in item_indices,
+        # instead of creating full slices, increase the element_size to read data in larger chunks
+        if len(index_arrays) < len(dimensions):
+            # Calculate how much to increase element_size by multiplying by the sizes of all remaining dimensions
+            remaining_dimensions_size = 1
+            for i in range(len(index_arrays), len(dimensions)):
+                remaining_dimensions_size *= dimensions[i]
+                result_shape.append(dimensions[i])  # Add dimension to result shape
+
+            # Increase chunk_size to read all data for remaining dimensions at once
+            chunk_size *= remaining_dimensions_size
+
+        if len(index_arrays) == 0:
+            index_arrays = [(0,)]
+
+        # Return all the variables needed for the actual data reading
+        return dtype, index_arrays, result_shape, chunk_size, strides, element_size

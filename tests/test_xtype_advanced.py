@@ -148,19 +148,19 @@ class TestXTypeAdvanced(unittest.TestCase):
             self.assertEqual(len(xf["large_array"]), 1_000_000)
 
             # Test random access to elements
-            self.assertEqual(xf["large_array"][0](), 0)
-            self.assertEqual(xf["large_array"][999_999](), 999_999)
-            self.assertEqual(xf["large_array"][500_000](), 500_000)
+            self.assertEqual(xf["large_array"][0], 0)
+            self.assertEqual(xf["large_array"][999_999], 999_999)
+            self.assertEqual(xf["large_array"][500_000], 500_000)
 
             # Test slicing on large array
             np.testing.assert_array_equal(
-                xf["large_array"][500_000:500_010](),
+                xf["large_array"][500_000:500_010],
                 large_array[500_000:500_010]
             )
 
             # Test strided slicing
             np.testing.assert_array_equal(
-                xf["large_array"][500_000:500_100:10](),
+                xf["large_array"][500_000:500_100:10],
                 large_array[500_000:500_100:10]
             )
 

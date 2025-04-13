@@ -136,35 +136,35 @@ class TestXTypeArrays(unittest.TestCase):
         # Test various indexing operations
         with xtype.File(self.temp_file.name, 'r') as xf:
             # Integer indexing
-            np.testing.assert_array_equal(xf["array_4d"][0](), array_4d[0])
-            np.testing.assert_array_equal(xf["array_4d"][1, 2](), array_4d[1, 2])
-            np.testing.assert_array_equal(xf["array_4d"][1, 2, 3](), array_4d[1, 2, 3])
-            np.testing.assert_array_equal(xf["array_4d"][1, 2, 3, 4](), array_4d[1, 2, 3, 4])
+            np.testing.assert_array_equal(xf["array_4d"][0], array_4d[0])
+            np.testing.assert_array_equal(xf["array_4d"][1, 2], array_4d[1, 2])
+            np.testing.assert_array_equal(xf["array_4d"][1, 2, 3], array_4d[1, 2, 3])
+            np.testing.assert_array_equal(xf["array_4d"][1, 2, 3, 4], array_4d[1, 2, 3, 4])
 
             # Negative indexing
-            np.testing.assert_array_equal(xf["array_4d"][-1](), array_4d[-1])
-            np.testing.assert_array_equal(xf["array_4d"][-1, -1](), array_4d[-1, -1])
+            np.testing.assert_array_equal(xf["array_4d"][-1], array_4d[-1])
+            np.testing.assert_array_equal(xf["array_4d"][-1, -1], array_4d[-1, -1])
 
             # Slice indexing
-            np.testing.assert_array_equal(xf["array_4d"][:](), array_4d[:])
-            np.testing.assert_array_equal(xf["array_4d"][0:1](), array_4d[0:1])
-            np.testing.assert_array_equal(xf["array_4d"][:, 1:3](), array_4d[:, 1:3])
-            np.testing.assert_array_equal(xf["array_4d"][0, :, 2:4](), array_4d[0, :, 2:4])
-            np.testing.assert_array_equal(xf["array_4d"][1, 1, :, :](), array_4d[1, 1, :, :])
+            np.testing.assert_array_equal(xf["array_4d"][:], array_4d[:])
+            np.testing.assert_array_equal(xf["array_4d"][0:1], array_4d[0:1])
+            np.testing.assert_array_equal(xf["array_4d"][:, 1:3], array_4d[:, 1:3])
+            np.testing.assert_array_equal(xf["array_4d"][0, :, 2:4], array_4d[0, :, 2:4])
+            np.testing.assert_array_equal(xf["array_4d"][1, 1, :, :], array_4d[1, 1, :, :])
 
             # Step slicing
-            np.testing.assert_array_equal(xf["array_4d"][::2](), array_4d[::2])
-            np.testing.assert_array_equal(xf["array_4d"][:, ::2](), array_4d[:, ::2])
-            np.testing.assert_array_equal(xf["array_4d"][0, 0, ::2](), array_4d[0, 0, ::2])
+            np.testing.assert_array_equal(xf["array_4d"][::2], array_4d[::2])
+            np.testing.assert_array_equal(xf["array_4d"][:, ::2], array_4d[:, ::2])
+            np.testing.assert_array_equal(xf["array_4d"][0, 0, ::2], array_4d[0, 0, ::2])
 
             # List indexing
-            np.testing.assert_array_equal(xf["array_4d"][[0]](), array_4d[[0]])
-            np.testing.assert_array_equal(xf["array_4d"][[0, 1], 1](), array_4d[[0, 1], 1])
-            np.testing.assert_array_equal(xf["array_4d"][0, [0, 2]](), array_4d[0, [0, 2]])
+            np.testing.assert_array_equal(xf["array_4d"][[0]], array_4d[[0]])
+            np.testing.assert_array_equal(xf["array_4d"][[0, 1], 1], array_4d[[0, 1], 1])
+            np.testing.assert_array_equal(xf["array_4d"][0, [0, 2]], array_4d[0, [0, 2]])
 
             # Mixed indexing
-            np.testing.assert_array_equal(xf["array_4d"][0:2, 1, [0, 2]](), array_4d[0:2, 1, [0, 2]])
-            np.testing.assert_array_equal(xf["array_4d"][[1], :2, 0](), array_4d[[1], :2, 0])
+            np.testing.assert_array_equal(xf["array_4d"][0:2, 1, [0, 2]], array_4d[0:2, 1, [0, 2]])
+            np.testing.assert_array_equal(xf["array_4d"][[1], :2, 0], array_4d[[1], :2, 0])
 
     def test_array_edge_cases(self):
         """Test edge cases of array indexing."""
@@ -179,11 +179,11 @@ class TestXTypeArrays(unittest.TestCase):
         # Test edge cases
         with xtype.File(self.temp_file.name, 'r') as xf:
             # Empty slice
-            np.testing.assert_array_equal(xf["array_3d"][3:4](), array_3d[3:4])  # Outside bounds
-            np.testing.assert_array_equal(xf["array_3d"][2:1](), array_3d[2:1])  # Inverse bounds
+            np.testing.assert_array_equal(xf["array_3d"][3:4], array_3d[3:4])  # Outside bounds
+            np.testing.assert_array_equal(xf["array_3d"][2:1], array_3d[2:1])  # Inverse bounds
 
             # Empty dimensions from list indexing
-            np.testing.assert_array_equal(xf["array_3d"][[], :, :](), array_3d[[], :, :])
+            np.testing.assert_array_equal(xf["array_3d"][[], :, :], array_3d[[], :, :])
 
             # Index errors
             with self.assertRaises(IndexError):
