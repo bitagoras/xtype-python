@@ -50,7 +50,8 @@ import itertools
 # <bin_data> represents the actual binary data of the specified size for the given type.
 # <EOF> marks the end of file. In streaming applications, this could be represented by a zero byte.
 
-class EmptyFile(Exception): pass
+class EmptyFile(Exception):
+    """Exception raised when trying to read from an empty file."""
 
 class File:
     """
@@ -60,6 +61,9 @@ class File:
     - Basic types: int, float, str, bytes, bool
     - Container types: list, dict
     - NumPy arrays: 1D, 2D, and higher-dimensional arrays with various data types
+
+    This class provides a high-level interface for working with xtype files, handling
+    both reading and writing operations with access to subelements.
     """
 
     def __init__(self, filename: str, mode: str = 'r', byteorder: str = 'auto'):
@@ -1421,7 +1425,7 @@ class objPointer:
 
     fileEnd, listEnd, dictEnd = [(i,) for i in ('',']','}')]
 
-    def __init__(self, file: File, reader: XTypeFileReader, writer: XTypeFileWriter, position: int = -1, onlyContent=False):
+    def __init__(self, file: 'File', reader: Optional[XTypeFileReader], writer: Optional[XTypeFileWriter], position: int = -1, onlyContent: bool = False):
         """
         Initialize an objPointer.
 
@@ -1458,14 +1462,15 @@ class objPointer:
         self.shape = shape
         self.footnotes = footnotes
 
-    def _reset_reading(self):
+    def _reset_reading(self) -> None:
+        """Reset the reader position to the data position of this object."""
         # Move to the position of this object
         self.reader._setPos(self.data_position)
 
         # Set the size of binary object at position
         self.reader._pending_binary_size = self.data_size
 
-    def __call__(self):
+    def __call__(self) -> Any:
         """
         Convert the entire object to a Python object.
 
@@ -1577,7 +1582,7 @@ class objPointer:
             # Not a list, dictionary, or array
             raise TypeError(f"Object of type '{self.symbol}' does not support len()")
 
-    def _get_item_value(self):
+    def _get_item_value(self) -> Any:
         """
         Determine whether to return an objPointer or a primitive value.
 
@@ -1602,7 +1607,7 @@ class objPointer:
             # Primitive type - read and return directly
             return obj()
 
-    def _skip_object(self):
+    def _skip_object(self) -> str:
         """
         Skip over an object in the file.
 
@@ -1633,7 +1638,7 @@ class objPointer:
                 symbol = next_symbol
         return symbol
 
-    def __getitem__(self, item):
+    def __getitem__(self, item: Union[int, str, slice, List[int], np.ndarray, Tuple]) -> Any:
         """
         Access a sub-element within the object using indexing operations.
 
@@ -1817,7 +1822,7 @@ class objPointer:
             # This includes primitive types like integers, floats, strings, etc.
             raise TypeError(f"Object of type '{self.symbol}' does not support indexing")
 
-    def __setitem__(self, item, value):
+    def __setitem__(self, item: Union[int, str, slice, Tuple], value: Any) -> None:
         """
         Assign a value to a sub-element within the object using indexing operations.
 
@@ -1983,7 +1988,7 @@ class objPointer:
 
         return self
 
-    def __next__(self):
+    def __next__(self) -> Any:
         """
         Return the next item in the iteration.
 
@@ -2010,7 +2015,7 @@ class objPointer:
 
         return value
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         """
         Return a string representation of the objPointer.
 
@@ -2042,14 +2047,16 @@ class objPointer:
             return f"<objPointer type='{type_name}'>"
 
 
-    def _handle_array_indexing(self, item):
+    def _handle_array_indexing(self, item: Union[int, slice, List[int], np.ndarray, Tuple]) -> Tuple[np.dtype, List, List[int], int, List[int], int]:
         """
         Prepare variables for array indexing operations.
 
         This method handles the preparation logic for array indexing including:
         - Processing various index types (int, slice, list, numpy array)
-        - Calculating strides and shapes
+        - Calculating strides and shapes for multi-dimensional arrays
         - Optimizing access patterns for different slice types
+        - Memory-efficient handling of contiguous slices
+        - Optimizing block reads for better performance
 
         Args:
             item: The index specifier (int, slice, list, numpy array, or tuple)
@@ -2141,7 +2148,7 @@ class objPointer:
         # Optimize by identifying full range slices with (1,0,-1) from the end
         full_range_count = 0
         for i in range(len(slice_info) - 1, -1, -1):
-            if slice_info[i] == (1,0,-1):
+            if slice_info[i] == (1,0,-1):  # This represents a full slice with step=1, start=0, full length
                 full_range_count += 1
             else:
                 break
@@ -2152,25 +2159,26 @@ class objPointer:
             index_arrays = index_arrays[:-full_range_count]
             result_shape = result_shape[:-full_range_count]
 
-        # Check if the last remaining slice has step 1
-        if slice_info and slice_info[-1][0] == 1:  # step == 1
+        # Optimize contiguous memory access: if the last remaining slice has step 1 (contiguous memory)
+        # we can read the whole slice at once instead of element by element
+        if slice_info and slice_info[-1][0] == 1:  # step == 1 (contiguous memory)
             step, start, length = slice_info[-1]
             # Replace the last index_arrays element with just the start value
-            # and increase chunk_size by the length factor
+            # and increase chunk_size by the length factor to read all elements in one operation
             if length > 0:  # Make sure length is valid
-                index_arrays[-1] = (start,)
-                chunk_size *= length
+                index_arrays[-1] = (start,)  # Just need the starting position
+                chunk_size *= length  # Increase chunk size to read the entire slice at once
 
-        # For any remaining shape not specified in item_indices,
+        # For any remaining dimensions not specified in item_indices (partial indexing case),
         # instead of creating full slices, increase the element_size to read data in larger chunks
         if len(index_arrays) < len(self.shape):
-            # Calculate how much to increase element_size by multiplying by the sizes of all remaining shape
+            # Calculate how much to increase element_size by multiplying by the sizes of all remaining dimensions
             remaining_dimensions_size = 1
             for i in range(len(index_arrays), len(self.shape)):
                 remaining_dimensions_size *= self.shape[i]
                 result_shape.append(self.shape[i])  # Add dimension to result shape
 
-            # Increase chunk_size to read all data for remaining shape at once
+            # Increase chunk_size to read all data for remaining dimensions at once (for performance)
             chunk_size *= remaining_dimensions_size
 
         if len(index_arrays) == 0:
