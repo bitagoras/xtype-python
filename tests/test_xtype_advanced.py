@@ -100,8 +100,7 @@ class TestXTypeAdvanced(unittest.TestCase):
 
         # Try to read from empty file
         with xtype.File(self.temp_file.name, 'r') as xf:
-            data = xf.read()
-            self.assertIsNone(data)  # Empty file should return None
+            self.assertIsNone(xf)  # Empty file should return None
 
     def test_nested_structure_depth(self):
         """Test deeply nested data structures."""

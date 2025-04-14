@@ -23,7 +23,7 @@ __version__ = "0.4.0"
 
 import struct
 import numpy as np
-from typing import Any, Dict, List, Tuple, BinaryIO, Iterator, Optional, Union
+from typing import Any, Dict, List, Tuple, BinaryIO, Iterator
 import sys
 import itertools
 
@@ -49,6 +49,8 @@ import itertools
 
 # <bin_data> represents the actual binary data of the specified size for the given type.
 # <EOF> marks the end of file. In streaming applications, this could be represented by a zero byte.
+
+class EmptyFile(Exception): pass
 
 class File:
     """
@@ -80,10 +82,14 @@ class File:
         self.reader = None
         self.writer = None
         self.byteorder = byteorder
+        self.root = None
 
     def __enter__(self):
         """Context manager entry point."""
-        self.open()
+        try:
+            self.open()
+        except EmptyFile:
+            return None
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -104,6 +110,8 @@ class File:
             self.writer = XTypeFileWriter(self.file, byteorder=self.byteorder)
         else:
             raise ValueError(f"Unsupported mode: {self.mode}")
+        if self.mode in 'ra':
+            self.root = objPointer(self.file, self.reader, self.writer, 0)
 
     def close(self):
         """Close the file."""
@@ -179,11 +187,8 @@ class File:
         if self.mode not in 'ra':
             raise IOError("File is not open in read mode")
 
-        # Create an objPointer at the beginning of the file
-        root = objPointer(self, 0)
-
         # Use the objPointer's __getitem__ method
-        return root[key]
+        return self.root[key]
 
     def read_debug(self, indent_size: int = 2, max_indent_level: int = 10, max_binary_bytes: int = 15) -> Iterator[str]:
         """
@@ -219,9 +224,7 @@ class File:
         if self.mode != 'r':
             raise IOError("File is not open in read mode")
 
-        # Create an objPointer at the beginning of the file
-        ptr = objPointer(self, 0)
-        return ptr.keys()
+        return self.root.keys()
 
     def __len__(self):
         """
@@ -240,9 +243,7 @@ class File:
         if self.mode != 'r':
             raise IOError("File is not open in read mode")
 
-        # Create an objPointer at the beginning of the file
-        ptr = objPointer(self, 0)
-        return len(ptr)
+        return len(self.root)
 
     def __iter__(self):
         """
@@ -261,11 +262,8 @@ class File:
         if self.mode not in 'ra':
             raise IOError("File is not open in read mode")
 
-        # Create an objPointer at the beginning of the file
-        ptr = objPointer(self, 0)
-
         # Delegate to the objPointer's __iter__ method
-        return iter(ptr)
+        return iter(self.root)
 
 class XTypeFileWriter:
     """
@@ -980,8 +978,8 @@ class XTypeFileReader:
             if symbol == '*':
                 # This is a footnote marker
                 # Read the footnote content that follows the marker
-                footnote_symbol, footnote_size, footnote_shape = self._read_type()
-                footnotes.append((footnote_symbol, footnote_size, footnote_shape))
+                footnote = objPointer(self.file, self, None, onlyContent=True)
+                footnotes.append(footnote)
             else:
                 # This is not a footnote, so we're done
                 isFootnote = False
@@ -1030,7 +1028,7 @@ class XTypeFileReader:
         # If we reach here, we've reached the end of the file
         return '', 0, []
 
-    def _read_object(self, object_header=None) -> Any:
+    def _read_object(self) -> Any:
         """
         Read an object from the file.
 
@@ -1038,13 +1036,10 @@ class XTypeFileReader:
             The Python object read from the file
         """
 
-        if object_header is None:
-            object_header = self._read_header()
-
-        symbol, size, shape, footnotes = object_header
+        symbol, size, shape, footnotes = self._read_header()
 
         if symbol in ('', ']', '}'):
-            return (None, symbol)
+            return (symbol,)
         else:
             return self._read_element(symbol, size, shape)
 
@@ -1407,10 +1402,13 @@ class XTypeFileReader:
 
             # If the value is -11772, we need to switch the byteorder
             self.need_byteswap = bom_value == -11772
+        elif len(marker) == 0:
+            raise EmptyFile
         else:
             # Reset the file position to the beginning
             self._setPos(0)
             self.need_byteswap = False
+            return False
 
 
 class objPointer:
@@ -1421,9 +1419,9 @@ class objPointer:
     into memory, by tracking file positions and footnotes directly to the relevant parts of the file.
     """
 
-    fileEnd, listEnd, dictEnd = [(None, i) for i in ('',']','}')]
+    fileEnd, listEnd, dictEnd = [(i,) for i in ('',']','}')]
 
-    def __init__(self, file: File, position: int = -1, symbol = None, size = 0, shape = [], footnotes = []):
+    def __init__(self, file: File, reader: XTypeFileReader, writer: XTypeFileWriter, position: int = -1, onlyContent=False):
         """
         Initialize an objPointer.
 
@@ -1432,39 +1430,40 @@ class objPointer:
             position: The position in the file where the object starts
         """
         self.file = file
-        self.reader = file.reader
-        self.writer = file.writer
+        self.reader = reader
+        self.writer = writer
 
         if position < 0:
-            position = self.file.file.tell()
+            self.position = self.file.tell()
         else:
             # Move file pointer to the specified position
-            self.file.file.seek(position)
-        self.reader._pending_binary_size = size
+            self.file.seek(position)
+            self.position = position
 
-        if symbol is None:
+        if onlyContent:
+            # Read only the object type
+            symbol, size, shape = self.reader._read_type()
+            footnotes = None
+        else:
             # Read the object info (footnotes, type)
             symbol, size, shape, footnotes = self.reader._read_header()
 
-            # Save current position
-            position = self.reader._getPos()
+        if not symbol:
+            raise EOFError
 
-            if not symbol:
-                raise EOFError
-
-        self.position = position
+        # Save data position
+        self.data_position = self.reader._getPos()
         self.symbol = symbol
-        self.size = size
+        self.data_size = size
         self.shape = shape
         self.footnotes = footnotes
-        self.object_header = symbol, size, shape, footnotes
 
     def _reset_reading(self):
         # Move to the position of this object
-        self.reader._setPos(self.position)
+        self.reader._setPos(self.data_position)
 
         # Set the size of binary object at position
-        self.reader._pending_binary_size = self.size
+        self.reader._pending_binary_size = self.data_size
 
     def __call__(self):
         """
@@ -1474,12 +1473,14 @@ class objPointer:
             Any: The Python object read from the file
         """
 
-        # Move to the reading position back
-        self._reset_reading()
+        self.reader._setPos(self.data_position)
+        self.reader._pending_binary_size = self.data_size
 
-        # Read the object
-        result = self.reader._read_object(self.object_header)
-
+        if self.symbol in ('', ']', '}'):
+            result = (self.symbol,)
+        else:
+            # Read the date and return the Python object
+            result = self.reader._read_element(self.symbol, self.data_size, self.shape)
         return result
 
     def keys(self):
@@ -1493,12 +1494,13 @@ class objPointer:
             TypeError: If the object is not a dictionary
         """
 
-        # Move to the reading position back
-        self._reset_reading()
+        assert self.reader is not None
 
         # Check if object is a dictionary
         if self.symbol != '{':
             raise TypeError(f"Object of type '{self.symbol}' is not a dictionary")
+
+        self._reset_reading()
 
         # Read keys while skipping values
         keys = []
@@ -1533,6 +1535,8 @@ class objPointer:
             TypeError: If the object does not support length operations
         """
 
+        assert self.reader is not None
+
         # Move to the reading position back
         self._reset_reading()
 
@@ -1561,15 +1565,11 @@ class objPointer:
                 # Handle case where EOF closes the list
                 pass
 
-            # Move to the reading position back
             self._reset_reading()
-
             return count
 
         # Handle arrays (non-container types with shape)
         elif self.shape and len(self.shape) > 0:
-            # Move to the reading position back
-            self._reset_reading()
 
             # For arrays, return the first dimension size
             return self.shape[0]
@@ -1588,16 +1588,19 @@ class objPointer:
         Returns:
             Either an objPointer instance or a primitive value depending on the object type
         """
+
+        obj = objPointer(self.file, self.reader, self.writer)
+
         # Peek at the next object information to determine its type
-        symbol, size, shape, footnotes = object_header = self.reader._read_header()
+        # symbol, size, shape, footnotes = object_header = self.reader._read_header()
 
         # Determine whether to return an objPointer or the actual value
-        if symbol in '[{' or (shape and (len(shape) > 1 or symbol not in 'sxu')):
+        if obj.symbol in '[{' or (obj.shape and (len(obj.shape) > 1 or obj.symbol not in 'sxu')):
             # Container type or array - return objPointer
-            return objPointer(self.file, self.reader._getPos(False), symbol, size, shape, footnotes)
+            return obj
         else:
             # Primitive type - read and return directly
-            return self.reader._read_object(object_header)
+            return obj()
 
     def _skip_object(self):
         """
@@ -1664,6 +1667,8 @@ class objPointer:
             ValueError: If an unsupported array type is encountered or invalid slice parameters
         """
 
+        assert self.reader is not None
+
         # Move to the reading position back
         self._reset_reading()
 
@@ -1724,7 +1729,7 @@ class objPointer:
                     value = self.reader._read_object()
                     if type(value) is not tuple:
                         result.append(value)
-                    elif value[1] == ']' and stop == float('inf'):
+                    elif value == self.listEnd and stop == float('inf'):
                         break
                     else:
                         raise IndexError(f"List index {index} out of range, unexpected symbol {value}")
@@ -1768,7 +1773,7 @@ class objPointer:
 
         elif self.shape and (len(self.shape) > 1 or self.symbol not in 'sxu'):
             # Get the current file position as the data start position
-            data_start_pos = self.file.file.tell()  # Position where the actual array data begins
+            data_start_pos = self.file.tell()  # Position where the actual array data begins
             # Call the helper method for array handling to prepare variables
             dtype, index_arrays, result_shape, chunk_size, strides, element_size = \
                     self._handle_array_indexing(item)
@@ -1786,8 +1791,8 @@ class objPointer:
                           for idx, stride in zip(indices, strides))
 
                 # Seek to the position of this element and read the data
-                self.file.file.seek(data_start_pos + offset)
-                element_bytes = self.file.file.read(chunk_size)
+                self.file.seek(data_start_pos + offset)
+                element_bytes = self.file.read(chunk_size)
 
                 # Ensure we read the expected number of bytes - this could fail at EOF or with corrupted files
                 assert len(element_bytes) == chunk_size
@@ -1836,6 +1841,8 @@ class objPointer:
             ValueError: If shape or dtype mismatch between value and target
         """
 
+        assert self.writer is not None
+
         # Move to the reading position back
         self._reset_reading()
 
@@ -1844,7 +1851,7 @@ class objPointer:
             raise TypeError(f"Object of type '{self.symbol}' does not support item assignment")
 
         # Get the current file position as the data start position
-        data_start_pos = self.file.file.tell()  # Position where the actual array data begins
+        data_start_pos = self.file.tell()  # Position where the actual array data begins
 
         # Call the helper method for array handling to prepare variables
         dtype, index_arrays, result_shape, chunk_size, strides, element_size = \
@@ -1867,8 +1874,7 @@ class objPointer:
             raise ValueError(f"Shape mismatch: trying to assign array with shape {value.shape} to slice with shape {tuple(result_shape)}")
 
         # Make sure the file is in append mode to allow writing
-        current_mode = self.file.file.mode
-        if 'a' not in current_mode and '+' not in current_mode:
+        if None in (self.reader, self.writer):
             raise IOError("File must be opened in append mode ('a') for array assignment operations")
 
         # Use itertools.product to iterate over all combinations of indices
@@ -1902,7 +1908,7 @@ class objPointer:
                       for idx, stride in zip(indices, strides))
 
             # Seek to the position of this element
-            self.file.file.seek(data_start_pos + offset)
+            self.file.seek(data_start_pos + offset)
 
             # Handle writing based on chunk size
             if use_chunks:
@@ -1948,7 +1954,7 @@ class objPointer:
                     raise ValueError("No values to assign")
 
             # Write the data
-            self.file.file.write(binary_value)
+            self.file.write(binary_value)
 
     def __iter__(self):
         """
@@ -1993,24 +1999,24 @@ class objPointer:
             raise StopIteration
 
         # Otherwise, read the object and increment index
-        value = self.reader._read_object()
+        value = objPointer(self.file, self.reader, self.writer)()
         self._iter_index += 1
 
         # If we're at the end of the list, stop iteration
-        if type(value) is tuple:
+        if type(value) is tuple and value in (self.listEnd, self.fileEnd):
             self._iter_done = True
             self.reader._setPos(self._iter_original_pos)
             raise StopIteration
 
         return value
-        
+
     def __repr__(self):
         """
         Return a string representation of the objPointer.
-        
+
         For arrays, includes shape information.
         For other types, shows the type symbol.
-        
+
         Returns:
             str: A string representation of the objPointer
         """
@@ -2025,10 +2031,10 @@ class objPointer:
             '[': 'list', '{': 'dict',
             'T': 'true', 'F': 'false', 'n': 'null'
         }
-        
+
         # Get a readable type name
         type_name = type_names.get(self.symbol, self.symbol)
-        
+
         # For arrays (has shape and not a string/bytes type with only 1 dimension)
         if self.shape and (len(self.shape) > 1 or self.symbol not in 'sxu'):
             return f"<objPointer type='{type_name}' shape={self.shape}>"
