@@ -23,7 +23,7 @@ __version__ = "0.4.0"
 
 import struct
 import numpy as np
-from typing import Any, Dict, List, Tuple, BinaryIO, Iterator
+from typing import Any, Dict, List, Tuple, BinaryIO, Iterator, Optional, Union
 import sys
 import itertools
 
