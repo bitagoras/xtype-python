@@ -138,6 +138,10 @@ class File:
 
         self.writer._write_bom()
         self.writer._write_object(data)
+        self.writer.flush()
+        # If any containers were open, close them
+        # self._close_open_containers()
+
 
     def read(self) -> Any:
         """
@@ -310,6 +314,15 @@ class XTypeFileWriter:
         self.byteorder = byteorder if byteorder != 'auto' else sys.byteorder
         self.need_byteswap = self.byteorder != sys.byteorder
         self.struct_byteorder = {'little': '<', 'big': '>'}[self.byteorder]
+        self._buffer = []  # Buffer for binary fragments
+
+    def flush(self):
+        """
+        Write all buffered binary fragments to the file and clear the buffer.
+        """
+        for frag in self._buffer:
+            self.file.write(frag)
+        self._buffer.clear()
 
     def _write_bom(self):
         """
@@ -323,7 +336,7 @@ class XTypeFileWriter:
         -11772. If no such file signature is given, xtype is specified for big endian byte order as
         default.
         """
-        self.file.write(b'*j')
+        self._buffer.append(b'*j')
         self._write_int_value(1234, 'j')
 
     def _write_object(self, obj: Any):
@@ -345,7 +358,7 @@ class XTypeFileWriter:
             self._write_element(obj)
         elif obj is None:
             # Handle None explicitly
-            self.file.write(b'n')
+            self._buffer.append(b'n')
         else:
             self._write_element(obj)
 
@@ -356,10 +369,10 @@ class XTypeFileWriter:
         Args:
             lst: The list to write
         """
-        self.file.write(b'[')
+        self._buffer.append(b'[')
         for item in lst:
             self._write_object(item)
-        self.file.write(b']')
+        self._buffer.append(b']')
 
     def _write_dict(self, d: Dict):
         """
@@ -368,7 +381,7 @@ class XTypeFileWriter:
         Args:
             d: The dictionary to write
         """
-        self.file.write(b'{')
+        self._buffer.append(b'{')
         for key, value in d.items():
             # Convert key to string if it's not already
             if not isinstance(key, str):
@@ -377,7 +390,7 @@ class XTypeFileWriter:
             self._write_element(key)
             # Write the value
             self._write_object(value)
-        self.file.write(b'}')
+        self._buffer.append(b'}')
 
     def _write_element(self, value: Any):
         """
@@ -387,33 +400,33 @@ class XTypeFileWriter:
             value: The value to write
         """
         if value is None:
-            self.file.write(b'n')
+            self._buffer.append(b'n')
         elif isinstance(value, bool):
-            self.file.write(b'T' if value else b'F')
+            self._buffer.append(b'T' if value else b'F')
         elif isinstance(value, int):
             type_code = self._select_int_type(value)
-            self.file.write(type_code.encode())
+            self._buffer.append(type_code.encode())
             self._write_int_value(value, type_code)
         elif isinstance(value, float):
-            self.file.write(b'd')
-            self.file.write(struct.pack(f'{self.struct_byteorder}d', value))
+            self._buffer.append(b'd')
+            self._buffer.append(struct.pack(f'{self.struct_byteorder}d', value))
         elif isinstance(value, str):
             # Write string with length prefix
             encoded = value.encode('utf-8')
             self._write_length(len(encoded))
-            self.file.write(b's')
-            self.file.write(encoded)
+            self._buffer.append(b's')
+            self._buffer.append(encoded)
         elif isinstance(value, bytes):
             # Write bytes with length prefix
             self._write_length(len(value))
-            self.file.write(b'x')
-            self.file.write(value)
+            self._buffer.append(b'x')
+            self._buffer.append(value)
         elif isinstance(value, np.number) or isinstance(value, np.bool_):
             # Handle NumPy scalar types
             dtype = value.dtype
             if dtype in self.type_map:
                 type_code = self.type_map[dtype]
-                self.file.write(type_code.encode())
+                self._buffer.append(type_code.encode())
 
                 # Process based on the specific scalar type
                 if np.issubdtype(dtype, np.integer):
@@ -423,12 +436,12 @@ class XTypeFileWriter:
                         # Only need to byteswap for multi-byte integers (16, 32, 64 bit)
                         if self.need_byteswap and type_code not in ('i', 'I'):
                             data = data.byteswap()
-                        self.file.write(data.tobytes())
+                        self._buffer.append(data.tobytes())
                 elif np.issubdtype(dtype, np.bool_):
                     # Handle boolean type
                     if type_code == 'b':
                         # boolean
-                        self.file.write(np.asarray(value, dtype=np.bool_).tobytes())
+                        self._buffer.append(np.asarray(value, dtype=np.bool_).tobytes())
                 elif np.issubdtype(dtype, np.floating):
                     # Handle floating point types
                     if type_code in ('h', 'f', 'd'):
@@ -437,7 +450,7 @@ class XTypeFileWriter:
                         data = np.asarray(value, dtype=dtype_map[type_code])
                         if self.need_byteswap:
                             data = data.byteswap()
-                        self.file.write(data.tobytes())
+                        self._buffer.append(data.tobytes())
             else:
                 # Default fallback for unsupported NumPy scalar types: convert to Python scalar
                 self._write_element(value.item())
@@ -476,14 +489,14 @@ class XTypeFileWriter:
             self._write_length(str_length)
 
             # For string arrays, use 's' type code
-            self.file.write(b's')
+            self._buffer.append(b's')
 
             # Ensure the array is in C-contiguous order for efficient serialization
             if not arr.flags.c_contiguous:
                 arr = np.ascontiguousarray(arr)
 
             # Write the entire array memory to the file
-            self.file.write(arr.tobytes())
+            self._buffer.append(arr.tobytes())
 
             return
 
@@ -491,7 +504,7 @@ class XTypeFileWriter:
             raise TypeError(f"Unsupported NumPy dtype: {dtype}")
 
         type_code = self.type_map[dtype]
-        self.file.write(type_code.encode())
+        self._buffer.append(type_code.encode())
 
         # Ensure the array is in C-contiguous order for efficient serialization
         if not arr.flags.c_contiguous:
@@ -505,25 +518,25 @@ class XTypeFileWriter:
         # Write the array data based on its type
         if dtype == np.dtype('bool'):
             # Convert boolean array to bytes (0x00 for False, 0xFF for True)
-            self.file.write(np.where(arr, 0xFF, 0x00).astype(np.uint8).tobytes())
+            self._buffer.append(np.where(arr, 0xFF, 0x00).astype(np.uint8).tobytes())
         elif np.issubdtype(dtype, np.integer):
             # Handle integer types
             if type_code in ('i', 'I'):  # uint8, int8
-                self.file.write(arr.tobytes())
+                self._buffer.append(arr.tobytes())
             elif type_code in ('j', 'J'):  # uint16, int16
-                self.file.write(tobytes(arr.astype(dtype)))
+                self._buffer.append(tobytes(arr.astype(dtype)))
             elif type_code in ('k', 'K'):  # uint32, int32
-                self.file.write(tobytes(arr.astype(dtype)))
+                self._buffer.append(tobytes(arr.astype(dtype)))
             elif type_code in ('l', 'L'):  # uint64, int64
-                self.file.write(tobytes(arr.astype(dtype)))
+                self._buffer.append(tobytes(arr.astype(dtype)))
         elif np.issubdtype(dtype, np.floating):
             # Handle floating point types
             if type_code == 'h':  # float16
-                self.file.write(tobytes(arr.astype(np.float16)))
+                self._buffer.append(tobytes(arr.astype(np.float16)))
             elif type_code == 'f':  # float32
-                self.file.write(tobytes(arr.astype(np.float32)))
+                self._buffer.append(tobytes(arr.astype(np.float32)))
             elif type_code == 'd':  # float64
-                self.file.write(tobytes(arr.astype(np.float64)))
+                self._buffer.append(tobytes(arr.astype(np.float64)))
 
     def _select_int_type(self, value: int) -> str:
         """
@@ -568,7 +581,7 @@ class XTypeFileWriter:
         }
         format_char = type_format.get(type_code)
         if format_char:
-            self.file.write(struct.pack(f'{self.struct_byteorder}{format_char}', value))
+            self._buffer.append(struct.pack(f'{self.struct_byteorder}{format_char}', value))
 
     def _write_length(self, length: int):
         """
@@ -579,23 +592,23 @@ class XTypeFileWriter:
         """
         if length <= 9:
             # Single-digit lengths are written as ASCII characters '0' through '9'
-            self.file.write(str(length).encode())
+            self._buffer.append(str(length).encode())
         elif length <= 0xFF:
             # uint8 length
-            self.file.write(b'M')
-            self.file.write(struct.pack(f'{self.struct_byteorder}B', length))
+            self._buffer.append(b'M')
+            self._buffer.append(struct.pack(f'{self.struct_byteorder}B', length))
         elif length <= 0xFFFF:
             # uint16 length
-            self.file.write(b'N')
-            self.file.write(struct.pack(f'{self.struct_byteorder}H', length))
+            self._buffer.append(b'N')
+            self._buffer.append(struct.pack(f'{self.struct_byteorder}H', length))
         elif length <= 0xFFFFFFFF:
             # uint32 length
-            self.file.write(b'O')
-            self.file.write(struct.pack(f'{self.struct_byteorder}I', length))
+            self._buffer.append(b'O')
+            self._buffer.append(struct.pack(f'{self.struct_byteorder}I', length))
         else:
             # uint64 length
-            self.file.write(b'P')
-            self.file.write(struct.pack(f'{self.struct_byteorder}Q', length))
+            self._buffer.append(b'P')
+            self._buffer.append(struct.pack(f'{self.struct_byteorder}Q', length))
 
 
 class XTypeFileReader:
@@ -1145,7 +1158,7 @@ class XTypeFileReader:
         while True:
             symbol, size, shape = self._read_type()
 
-            if symbol == ']':
+            if symbol == ']' or symbol == '':
                 # End of list
                 break
             elif symbol in self.type_sizes:
@@ -1176,7 +1189,7 @@ class XTypeFileReader:
             # Read the key
             symbol, size, shape = self._read_type()
 
-            if symbol == '}':
+            if symbol == '}' or symbol == '':
                 # End of dictionary
                 break
 
