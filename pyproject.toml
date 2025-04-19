@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "xtype"
-version = "0.4.0"
+version = "0.5.0"
 description = "A Python library for serializing and deserializing data structures using the xtype binary format"
 readme = "README.md"
 authors = [{ name = "bitagoras", email = "bitagoras@users.noreply.github.com" }]

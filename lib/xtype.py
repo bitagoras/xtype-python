@@ -19,7 +19,7 @@ License: MIT
 Project: https://github.com/bitagoras/xtype-python
 """
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 import struct
 import numpy as np
@@ -49,6 +49,96 @@ import itertools
 
 # <bin_data> represents the actual binary data of the specified size for the given type.
 # <EOF> marks the end of file. In streaming applications, this could be represented by a zero byte.
+
+class ListProxy:
+    def __init__(self, file, parent):
+        self.file = file  # xtype.File instance
+        self.parent = parent  # Parent proxy or None
+        self._closed = False
+        self._closing_char = b']'
+        # Write opening bracket
+        self.file.writer._buffer.append(b'[')
+        self.file.writer.flush()
+
+    def add(self, value):
+        if self._closed:
+            raise RuntimeError("Cannot add to closed list.")
+        # Close any inner containers
+        self.file._close_to(self)
+        # Handle nested containers
+        if isinstance(value, dict):
+            proxy = DictProxy(self.file, parent=self)
+            self.file._open_containers.append(proxy)
+            self.file.last = proxy
+            self.file.writer.flush()
+            return proxy
+        elif isinstance(value, list):
+            proxy = ListProxy(self.file, parent=self)
+            self.file._open_containers.append(proxy)
+            self.file.last = proxy
+            self.file.writer.flush()
+            return proxy
+        else:
+            # Write primitive
+            self.file.writer._write_object(value)
+            self.file.writer.flush()
+            self.file.last = self
+            return None
+
+    def __setitem__(self, key, value):
+        raise TypeError("Cannot use __setitem__ on a list container. Use add().")
+
+    def _close(self):
+        if not self._closed:
+            self.file.writer._buffer.append(self._closing_char)
+            self.file.writer.flush()
+            self._closed = True
+
+class DictProxy:
+    def __init__(self, file, parent):
+        self.file = file  # xtype.File instance
+        self.parent = parent  # Parent proxy or None
+        self._closed = False
+        self._closing_char = b'}'
+        # Write opening brace
+        self.file.writer._buffer.append(b'{')
+        self.file.writer.flush()
+
+    def __setitem__(self, key, value):
+        if self._closed:
+            raise RuntimeError("Cannot write to closed dict.")
+        # Close any inner containers
+        self.file._close_to(self)
+        # Write key (as xtype string)
+        self.file.writer._write_object(key)
+        # Handle nested containers
+        if isinstance(value, dict):
+            proxy = DictProxy(self.file, parent=self)
+            self.file._open_containers.append(proxy)
+            self.file.last = proxy
+            self.file.writer.flush()
+            return proxy
+        elif isinstance(value, list):
+            proxy = ListProxy(self.file, parent=self)
+            self.file._open_containers.append(proxy)
+            self.file.last = proxy
+            self.file.writer.flush()
+            return proxy
+        else:
+            # Write primitive
+            self.file.writer._write_object(value)
+            self.file.writer.flush()
+            self.file.last = self
+            return None
+
+    def add(self, value):
+        raise TypeError("Cannot use add() on a dict container. Use __setitem__.")
+
+    def _close(self):
+        if not self._closed:
+            self.file.writer._buffer.append(self._closing_char)
+            self.file.writer.flush()
+            self._closed = True
 
 class EmptyFile(Exception):
     """Exception raised when trying to read from an empty file."""
@@ -87,6 +177,8 @@ class File:
         self.writer = None
         self.byteorder = byteorder
         self.root = None
+        self.last = None  # Points to the most recently active container proxy
+        self._open_containers = []  # Stack of open proxies (root to most nested)
 
     def __enter__(self):
         """Context manager entry point."""
@@ -98,6 +190,12 @@ class File:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Context manager exit point."""
+        # Close all open containers (from innermost to outermost)
+        if self.mode == 'w' and self._open_containers:
+            for proxy in reversed(self._open_containers):
+                if hasattr(proxy, '_close'):
+                    proxy._close()
+            self._open_containers.clear()
         self.close()
 
     def open(self):
@@ -105,6 +203,9 @@ class File:
         if self.mode == 'w':
             self.file = open(self.filename, 'wb')
             self.writer = XTypeFileWriter(self.file, byteorder=self.byteorder)
+            self.root = None
+            self.last = None
+            self._open_containers = []
         elif self.mode == 'r':
             self.file = open(self.filename, 'rb')
             self.reader = XTypeFileReader(self.file, byteorder=self.byteorder)
@@ -119,8 +220,55 @@ class File:
 
     def close(self):
         """Close the file."""
-        if self.file and not self.file.closed:
+        if self.file:
             self.file.close()
+            self.file = None
+
+    def __setitem__(self, key, value):
+        """
+        Incrementally write a key-value pair to the root dict, or create the root dict if not present.
+        """
+        if self.mode != 'w':
+            raise IOError("File not open for writing")
+        if self.root is None:
+            # First operation: initialize root as dict
+            self.root = DictProxy(self, parent=None)
+            self._open_containers.append(self.root)
+            self.last = self.root
+        elif not isinstance(self.root, DictProxy):
+            raise TypeError("Root container is already a list; cannot use dict-style assignment.")
+        # Ensure correct container closure
+        self._close_to(self.root)
+        self.last = self.root
+        self.root[key] = value
+
+    def add(self, value):
+        """
+        Incrementally add a value to the root list, or create the root list if not present.
+        """
+        if self.mode != 'w':
+            raise IOError("File not open for writing")
+        if self.root is None:
+            # First operation: initialize root as list
+            self.root = ListProxy(self, parent=None)
+            self._open_containers.append(self.root)
+            self.last = self.root
+        elif not isinstance(self.root, ListProxy):
+            raise TypeError("Root container is already a dict; cannot use list-style add.")
+        # Ensure correct container closure
+        self._close_to(self.root)
+        self.last = self.root
+        self.root.add(value)
+
+    def _close_to(self, target_proxy):
+        """
+        Close all open containers above and including the top, until target_proxy is on top.
+        """
+        while self._open_containers and self._open_containers[-1] is not target_proxy:
+            proxy = self._open_containers.pop()
+            if hasattr(proxy, '_close'):
+                proxy._close()
+        # Don't pop target_proxy itself
 
     def write(self, data: Any):
         """
