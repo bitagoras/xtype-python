@@ -56,6 +56,9 @@ class ListProxy:
         self.parent = parent  # Parent proxy or None
         self._closed = False
         self._closing_char = b']'
+        # Error handling: Check if file is closed or writer is missing
+        if getattr(self.file, 'file', None) is None or getattr(self.file, 'writer', None) is None:
+            raise ValueError("Cannot write to file: file is closed.")
         # Write opening bracket
         self.file.writer._buffer.append(b'[')
         self.file.writer.flush()
@@ -100,6 +103,9 @@ class DictProxy:
         self.parent = parent  # Parent proxy or None
         self._closed = False
         self._closing_char = b'}'
+        # Error handling: Check if file is closed or writer is missing
+        if getattr(self.file, 'file', None) is None or getattr(self.file, 'writer', None) is None:
+            raise ValueError("Cannot write to file: file is closed.")
         # Write opening brace
         self.file.writer._buffer.append(b'{')
         self.file.writer.flush()

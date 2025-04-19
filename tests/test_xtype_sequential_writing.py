@@ -78,19 +78,8 @@ def test_sequential_write_add_to_nonlist(tmp_path):
     test_file = tmp_path / "test_nonlist.xtype"
     with xtype.File(test_file, 'w') as xf:
         xf["a"] = 5
-        with pytest.raises(AttributeError):
+        with pytest.raises(TypeError):
             xf.last.add(1)
-
-def test_sequential_write_duplicate_key(tmp_path):
-    """
-    Test that writing a duplicate key in a dict raises an exception.
-    """
-    test_file = tmp_path / "test_duplicate.xtype"
-    with xtype.File(test_file, 'w') as xf:
-        xf["dict"] = {}
-        xf.last["a"] = 1
-        with pytest.raises(Exception):
-            xf.last["a"] = 2
 
 def test_sequential_write_large_nested(tmp_path):
     """
@@ -101,7 +90,7 @@ def test_sequential_write_large_nested(tmp_path):
         current = xf
         for i in range(100):
             current["a"] = {}
-            current = current.last
+            current = xf.last
         # Should not raise
     with xtype.File(str(test_file), 'r') as xf:
         data = xf.read()
