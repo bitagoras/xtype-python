@@ -151,10 +151,10 @@ def test_large_array(temp_file):
         # Access beginning elements
         assert xf["large_array"][0] == 0
         assert xf["large_array"][1] == 1
-        
+
         # Access middle elements
         assert xf["large_array"][500_000] == 500_000
-        
+
         # Access end elements
         assert xf["large_array"][-1] == 999_999
         assert xf["large_array"][-2] == 999_998
@@ -169,16 +169,14 @@ def test_file_operations(temp_file):
 
     # Test manual open/close
     xf = xtype.File(temp_file.name, 'r')
-    xf.open()
     assert xf.read() == test_data
     xf.close()
 
     # Test file is closed properly
-    assert xf.file.closed
+    assert xf.file is None
 
     # Test reusing the same file object
     xf = xtype.File(temp_file.name, 'r')
-    xf.open()
     result = xf.read()
     xf.close()
     assert result == test_data

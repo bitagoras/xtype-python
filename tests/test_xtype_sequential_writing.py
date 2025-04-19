@@ -57,7 +57,7 @@ def test_sequential_write_closed_file(tmp_path):
     test_file = tmp_path / "test_closed.xtype"
     xf = xtype.File(test_file, 'w')
     xf.close()
-    with pytest.raises(ValueError):
+    with pytest.raises(IOError):
         xf["a"] = 1
 
 def test_sequential_write_unsupported_type(tmp_path):

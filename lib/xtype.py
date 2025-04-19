@@ -150,6 +150,26 @@ class EmptyFile(Exception):
     """Exception raised when trying to read from an empty file."""
 
 class File:
+    def _check_open_for_reading(self):
+        if self.file is None:
+            if getattr(self, '_was_closed', False):
+                raise IOError("File was closed and cannot be reopened.")
+            self._open()
+        if not self.file or self.file.closed:
+            raise IOError("File is not open for reading")
+        if self.mode not in 'ra':
+            raise IOError("File is not open in read mode")
+
+    def _check_open_for_writing(self):
+        if self.file is None:
+            if getattr(self, '_was_closed', False):
+                raise IOError("File was closed and cannot be reopened.")
+            self._open()
+        if not self.file or self.file.closed:
+            raise IOError("File is not open for writing")
+        if self.mode != 'w':
+            raise IOError("File is not open in write mode")
+
     """
     A class for reading and writing Python data structures to files using the xtype binary format.
 
@@ -185,11 +205,12 @@ class File:
         self.root = None
         self.last = None  # Points to the most recently active container proxy
         self._open_containers = []  # Stack of open proxies (root to most nested)
+        self._was_closed = False
 
     def __enter__(self):
         """Context manager entry point."""
         try:
-            self.open()
+            self._open()
         except EmptyFile:
             return None
         return self
@@ -204,7 +225,7 @@ class File:
             self._open_containers.clear()
         self.close()
 
-    def open(self):
+    def _open(self):
         """Open the file for reading or writing."""
         if self.mode == 'w':
             self.file = open(self.filename, 'wb')
@@ -226,16 +247,18 @@ class File:
 
     def close(self):
         """Close the file."""
+        if self.file is None and not self._was_closed:
+            self._open()
         if self.file:
             self.file.close()
             self.file = None
+            self._was_closed = True
 
     def __setitem__(self, key, value):
         """
         Incrementally write a key-value pair to the root dict, or create the root dict if not present.
         """
-        if self.mode != 'w':
-            raise IOError("File not open for writing")
+        self._check_open_for_writing()
         if self.root is None:
             # First operation: initialize root as dict
             self.root = DictProxy(self, parent=None)
@@ -252,8 +275,7 @@ class File:
         """
         Incrementally add a value to the root list, or create the root list if not present.
         """
-        if self.mode != 'w':
-            raise IOError("File not open for writing")
+        self._check_open_for_writing()
         if self.root is None:
             # First operation: initialize root as list
             self.root = ListProxy(self, parent=None)
@@ -284,12 +306,7 @@ class File:
             data: The Python object to serialize (can be a primitive type,
                  list, dict, or numpy array)
         """
-        if not self.file or self.file.closed:
-            raise IOError("File is not open for writing")
-
-        if self.mode != 'w':
-            raise IOError("File is not open in write mode")
-
+        self._check_open_for_writing()
         self.writer._write_bom()
         self.writer._write_object(data)
         self.writer.flush()
@@ -304,15 +321,9 @@ class File:
         Returns:
             Any: The Python object read from the file
         """
-        if not self.file or self.file.closed:
-            raise IOError("File is not open for reading")
-
-        if self.mode != 'r':
-            raise IOError("File is not open in read mode")
-
+        self._check_open_for_reading()
         # Reset the file position to the beginning
         self.file.seek(0)
-
         # Start recursive parsing
         return self.reader.read()
 
@@ -343,12 +354,7 @@ class File:
             TypeError: If the object does not support the requested indexing operation
             IOError: If the file is not open for reading or not in read mode
         """
-        if not self.file or self.file.closed:
-            raise IOError("File is not open for reading")
-
-        if self.mode not in 'ra':
-            raise IOError("File is not open in read mode")
-
+        self._check_open_for_reading()
         # Use the objPointer's __getitem__ method
         return self.root[key]
 
