@@ -50,25 +50,33 @@ import itertools
 # <bin_data> represents the actual binary data of the specified size for the given type.
 # <EOF> marks the end of file. In streaming applications, this could be represented by a zero byte.
 
-class ListProxy:
-    def __init__(self, xtFile, parent):
-        self.xtFile = xtFile  # xtype.File instance
-        self.parent = parent  # Parent proxy or None
-        self._closed = False
-        self._closing_char = b']'
-        # Error handling: Check if file is closed or writer is missing
-        if getattr(self.xtFile, 'file', None) is None or getattr(self.xtFile, 'writer', None) is None:
-            raise ValueError("Cannot write to file: file is closed.")
-        # Write opening bracket
-        self.xtFile.writer._buffer.append(b'[')
-        self.xtFile.writer.flush()
+class _ContainerProxy:
+    """Internal base class for write‑mode container proxies (lists & dicts)."""
 
-    def add(self, value):
-        if self._closed:
-            raise RuntimeError("Cannot add to closed list.")
-        # Close any inner containers
+    def __init__(self, xtFile, parent, opening_char: bytes, closing_char: bytes):
+        self.xtFile = xtFile          # xtype.File instance
+        self.parent = parent          # The parent proxy or ``None`` (for root)
+        self._closed = False          # Flag to prevent further writes after closing
+        self._closing_char = closing_char  # Byte used to close the container
+
+        # Basic safety checks – refuse to operate on a closed/non‑writable file
+        if getattr(self.xtFile, "file", None) is None or getattr(self.xtFile, "writer", None) is None:
+            raise ValueError("Cannot write to file: file is closed.")
+
+        # Emit the opening token for the container immediately
+        if opening_char:
+            self.xtFile.writer._buffer.append(opening_char)
+            self.xtFile.writer.flush()
+
+    # ------------------------------------------------------------------
+    # Helper used by *both* ListProxy.add() and DictProxy.__setitem__()
+    # ------------------------------------------------------------------
+    def _handle_value(self, value):
+        """Write *value* (or open a nested container) and return nested proxy if any."""
+        # Close any inner containers so we always append to / write inside *this* container
         self.xtFile._close_to(self)
-        # Handle nested containers
+
+        # Delegated handling of nested containers / primitives -----------------
         if isinstance(value, dict):
             proxy = DictProxy(self.xtFile, parent=self)
             self.xtFile._open_containers.append(proxy)
@@ -82,69 +90,58 @@ class ListProxy:
             self.xtFile.writer.flush()
             return proxy
         else:
-            # Write primitive
+            # Primitive: let the writer serialise it directly
             self.xtFile.writer._write_object(value)
             self.xtFile.writer.flush()
             self.xtFile.last = self
             return None
 
+    # ------------------------------------------------------------------
+    def _ensure_not_closed(self, container_name: str):
+        if self._closed:
+            raise RuntimeError(f"Cannot write to closed {container_name}.")
+
+    # ------------------------------------------------------------------
+    def _close(self):
+        """Write the container's closing token if not already closed."""
+        if not self._closed:
+            self.xtFile.writer._buffer.append(self._closing_char)
+            self.xtFile.writer.flush()
+            self._closed = True
+
+class ListProxy(_ContainerProxy):
+    def __init__(self, xtFile, parent):
+        # '[' opens list, ']' closes
+        super().__init__(xtFile, parent, b'[', b']')
+
+    # ------------------------------------------------------------------
+    def add(self, value):
+        """Append *value* to the list, returning a proxy for nested containers."""
+        self._ensure_not_closed("list")
+        return self._handle_value(value)
+
+    # List does not support key assignment
     def __setitem__(self, key, value):
         raise TypeError("Cannot use __setitem__ on a list container. Use add().")
 
-    def _close(self):
-        if not self._closed:
-            self.xtFile.writer._buffer.append(self._closing_char)
-            self.xtFile.writer.flush()
-            self._closed = True
 
-class DictProxy:
+class DictProxy(_ContainerProxy):
     def __init__(self, xtFile, parent):
-        self.xtFile = xtFile  # xtype.File instance
-        self.parent = parent  # Parent proxy or None
-        self._closed = False
-        self._closing_char = b'}'
-        # Error handling: Check if file is closed or writer is missing
-        if getattr(self.xtFile, 'file', None) is None or getattr(self.xtFile, 'writer', None) is None:
-            raise ValueError("Cannot write to file: file is closed.")
-        # Write opening brace
-        self.xtFile.writer._buffer.append(b'{')
-        self.xtFile.writer.flush()
+        # '{' opens dict, '}' closes
+        super().__init__(xtFile, parent, b'{', b'}')
 
+    # ------------------------------------------------------------------
     def __setitem__(self, key, value):
-        if self._closed:
-            raise RuntimeError("Cannot write to closed dict.")
-        # Close any inner containers
-        self.xtFile._close_to(self)
-        # Write key (as xtype string)
+        self._ensure_not_closed("dict")
+        # Write the key first (always as xtype primitive)
         self.xtFile.writer._write_object(key)
-        # Handle nested containers
-        if isinstance(value, dict):
-            proxy = DictProxy(self.xtFile, parent=self)
-            self.xtFile._open_containers.append(proxy)
-            self.xtFile.last = proxy
-            self.xtFile.writer.flush()
-            return proxy
-        elif isinstance(value, list):
-            proxy = ListProxy(self.xtFile, parent=self)
-            self.xtFile._open_containers.append(proxy)
-            self.xtFile.last = proxy
-            self.xtFile.writer.flush()
-            return proxy
-        else:
-            # Write primitive
-            self.xtFile.writer._write_object(value)
-            self.xtFile.writer.flush()
-            self.xtFile.last = self
-            return None
+        # Delegate writing / nested‑proxy creation to the shared helper
+        return self._handle_value(value)
 
+    # Dicts purposefully disallow list‑style ``add``
     def add(self, value):
-        raise TypeError("Cannot use add() on a dict container. Use __setitem__.")
+        raise TypeError("Cannot use add() on a dict container. Use __setitem__().")
 
-    def _close(self):
-        if not self._closed:
-            self.xtFile.writer._buffer.append(self._closing_char)
-            self.xtFile.writer.flush()
-            self._closed = True
 
 class EmptyFile(Exception):
     """Exception raised when trying to read from an empty file."""
@@ -1531,7 +1528,7 @@ class XTypeFileReader:
             bytes: The binary data corresponding to the last type (up to max_bytes)
 
         Raises:
-            ValueError: If there is no pending binary data to read
+            ValueError: If there is no pending binary data to read. Call _read_raw() first.
         """
         if not self.file or self.file.closed:
             raise IOError("File is not open for reading")
