@@ -37,16 +37,16 @@ data = {
 }
 
 # Write data to file
-with xtype.File("xtype-data.bin", 'w') as xf:
+with xtype.File("xtype-data.xtype", 'w') as xf:
     xf.write(data)
 
 # Read data from file
-with xtype.File("xtype-data.bin", 'r') as xf:
+with xtype.File("xtype-data.xtype", 'r') as xf:
     read_data = xf.read()
     print(read_data)
 ```
 
-The data stored in `xtype-data.bin` has 208 Bytes.
+The data stored in `xtype-data.xtype` has 208 Bytes.
 
 ### Sequential Writing
 
@@ -56,7 +56,7 @@ xtype allows you to build complex nested structures sequentially using the `.las
 import xtype
 
 # Create a complex nested structure sequentially
-with xtype.File("sequential.bin", 'w') as xf:
+with xtype.File("sequential.xtype", 'w') as xf:
     xf["float"] = 3.5      # "float": 3.5 (initilaizes a root dict)
     xf["list"] = []         # "list": [...]
     list1 = xf.last         # Get reference to the list
@@ -74,16 +74,16 @@ with xtype.File("sequential.bin", 'w') as xf:
     xf.last.add(3)          # "dict": {"numbers": [1, 2, 3]}
 
 # The resulting structure is equivalent to:
-# {
-#     "float": 3.5,
-#     "list": [
-#         [1, 4, {"five": 5, "six": 6}],
-#         7
-#     ],
-#     "dict": {
-#         "numbers": [1, 2, 3]
-#     }
-# }
+data = {
+    "float": 3.5,
+    "list": [
+        [1, 4, {"five": 5, "six": 6}],
+        7
+    ],
+    "dict": {
+        "numbers": [1, 2, 3]
+    }
+}
 ```
 
 This approach is useful when:
@@ -96,7 +96,7 @@ This approach is useful when:
 xtype provides a debug mode to inspect the binary format:
 
 ```python
-with xtype.File("xtype-data.bin", 'r') as xf:
+with xtype.File("xtype-data.xtype", 'r') as xf:
     for chunk in xf.read_debug():
         print(chunk)
 ```
@@ -109,7 +109,7 @@ xtype supports efficient element access through indexing and slicing, allowing y
 
 ```python
 # Access dictionary values by key
-with xtype.File("data.bin", 'r') as xf:
+with xtype.File("data.xtype", 'r') as xf:
     # Access a top-level element
     value = xf["key"]
 
@@ -120,7 +120,7 @@ with xtype.File("data.bin", 'r') as xf:
 ### Accessing List and Array Elements
 
 ```python
-with xtype.File("data.bin", 'r') as xf:
+with xtype.File("data.xtype", 'r') as xf:
     # Access list items by index
     first_item = xf["my_list"][0]
 
@@ -134,7 +134,7 @@ with xtype.File("data.bin", 'r') as xf:
 ### Using Slices for Lists and Arrays
 
 ```python
-with xtype.File("data.bin", 'r') as xf:
+with xtype.File("data.xtype", 'r') as xf:
     # List slices
     slice1 = xf["my_list"][1:4]  # Elements 1 through 3
     slice2 = xf["my_list"][::2]  # Every other element
@@ -153,7 +153,7 @@ with xtype.File("data.bin", 'r') as xf:
 ### Mixed Indexing with Arrays
 
 ```python
-with xtype.File("data.bin", 'r') as xf:
+with xtype.File("data.xtype", 'r') as xf:
     # Mixed integer and slice indexing
     row_slice = xf["my_3d_array"][0, 1, :]  # All elements in a specific row
 ```
