@@ -51,41 +51,41 @@ import itertools
 # <EOF> marks the end of file. In streaming applications, this could be represented by a zero byte.
 
 class ListProxy:
-    def __init__(self, file, parent):
-        self.file = file  # xtype.File instance
+    def __init__(self, xtFile, parent):
+        self.xtFile = xtFile  # xtype.File instance
         self.parent = parent  # Parent proxy or None
         self._closed = False
         self._closing_char = b']'
         # Error handling: Check if file is closed or writer is missing
-        if getattr(self.file, 'file', None) is None or getattr(self.file, 'writer', None) is None:
+        if getattr(self.xtFile, 'file', None) is None or getattr(self.xtFile, 'writer', None) is None:
             raise ValueError("Cannot write to file: file is closed.")
         # Write opening bracket
-        self.file.writer._buffer.append(b'[')
-        self.file.writer.flush()
+        self.xtFile.writer._buffer.append(b'[')
+        self.xtFile.writer.flush()
 
     def add(self, value):
         if self._closed:
             raise RuntimeError("Cannot add to closed list.")
         # Close any inner containers
-        self.file._close_to(self)
+        self.xtFile._close_to(self)
         # Handle nested containers
         if isinstance(value, dict):
-            proxy = DictProxy(self.file, parent=self)
-            self.file._open_containers.append(proxy)
-            self.file.last = proxy
-            self.file.writer.flush()
+            proxy = DictProxy(self.xtFile, parent=self)
+            self.xtFile._open_containers.append(proxy)
+            self.xtFile.last = proxy
+            self.xtFile.writer.flush()
             return proxy
         elif isinstance(value, list):
-            proxy = ListProxy(self.file, parent=self)
-            self.file._open_containers.append(proxy)
-            self.file.last = proxy
-            self.file.writer.flush()
+            proxy = ListProxy(self.xtFile, parent=self)
+            self.xtFile._open_containers.append(proxy)
+            self.xtFile.last = proxy
+            self.xtFile.writer.flush()
             return proxy
         else:
             # Write primitive
-            self.file.writer._write_object(value)
-            self.file.writer.flush()
-            self.file.last = self
+            self.xtFile.writer._write_object(value)
+            self.xtFile.writer.flush()
+            self.xtFile.last = self
             return None
 
     def __setitem__(self, key, value):
@@ -93,48 +93,48 @@ class ListProxy:
 
     def _close(self):
         if not self._closed:
-            self.file.writer._buffer.append(self._closing_char)
-            self.file.writer.flush()
+            self.xtFile.writer._buffer.append(self._closing_char)
+            self.xtFile.writer.flush()
             self._closed = True
 
 class DictProxy:
-    def __init__(self, file, parent):
-        self.file = file  # xtype.File instance
+    def __init__(self, xtFile, parent):
+        self.xtFile = xtFile  # xtype.File instance
         self.parent = parent  # Parent proxy or None
         self._closed = False
         self._closing_char = b'}'
         # Error handling: Check if file is closed or writer is missing
-        if getattr(self.file, 'file', None) is None or getattr(self.file, 'writer', None) is None:
+        if getattr(self.xtFile, 'file', None) is None or getattr(self.xtFile, 'writer', None) is None:
             raise ValueError("Cannot write to file: file is closed.")
         # Write opening brace
-        self.file.writer._buffer.append(b'{')
-        self.file.writer.flush()
+        self.xtFile.writer._buffer.append(b'{')
+        self.xtFile.writer.flush()
 
     def __setitem__(self, key, value):
         if self._closed:
             raise RuntimeError("Cannot write to closed dict.")
         # Close any inner containers
-        self.file._close_to(self)
+        self.xtFile._close_to(self)
         # Write key (as xtype string)
-        self.file.writer._write_object(key)
+        self.xtFile.writer._write_object(key)
         # Handle nested containers
         if isinstance(value, dict):
-            proxy = DictProxy(self.file, parent=self)
-            self.file._open_containers.append(proxy)
-            self.file.last = proxy
-            self.file.writer.flush()
+            proxy = DictProxy(self.xtFile, parent=self)
+            self.xtFile._open_containers.append(proxy)
+            self.xtFile.last = proxy
+            self.xtFile.writer.flush()
             return proxy
         elif isinstance(value, list):
-            proxy = ListProxy(self.file, parent=self)
-            self.file._open_containers.append(proxy)
-            self.file.last = proxy
-            self.file.writer.flush()
+            proxy = ListProxy(self.xtFile, parent=self)
+            self.xtFile._open_containers.append(proxy)
+            self.xtFile.last = proxy
+            self.xtFile.writer.flush()
             return proxy
         else:
             # Write primitive
-            self.file.writer._write_object(value)
-            self.file.writer.flush()
-            self.file.last = self
+            self.xtFile.writer._write_object(value)
+            self.xtFile.writer.flush()
+            self.xtFile.last = self
             return None
 
     def add(self, value):
@@ -142,8 +142,8 @@ class DictProxy:
 
     def _close(self):
         if not self._closed:
-            self.file.writer._buffer.append(self._closing_char)
-            self.file.writer.flush()
+            self.xtFile.writer._buffer.append(self._closing_char)
+            self.xtFile.writer.flush()
             self._closed = True
 
 class EmptyFile(Exception):
@@ -229,21 +229,21 @@ class File:
         """Open the file for reading or writing."""
         if self.mode == 'w':
             self.file = open(self.filename, 'wb')
-            self.writer = XTypeFileWriter(self.file, byteorder=self.byteorder)
+            self.writer = XTypeFileWriter(self, byteorder=self.byteorder)
             self.root = None
             self.last = None
             self._open_containers = []
         elif self.mode == 'r':
             self.file = open(self.filename, 'rb')
-            self.reader = XTypeFileReader(self.file, byteorder=self.byteorder)
+            self.reader = XTypeFileReader(self, byteorder=self.byteorder)
         elif self.mode == 'a':
             self.file = open(self.filename, 'r+b')
-            self.reader = XTypeFileReader(self.file, byteorder=self.byteorder)
-            self.writer = XTypeFileWriter(self.file, byteorder=self.byteorder)
+            self.reader = XTypeFileReader(self, byteorder=self.byteorder)
+            self.writer = XTypeFileWriter(self, byteorder=self.byteorder)
         else:
             raise ValueError(f"Unsupported mode: {self.mode}")
         if self.mode in 'ra':
-            self.root = objPointer(self.file, self.reader, self.writer, 0)
+            self.root = objectProxy(self, 0)
 
     def close(self):
         """Close the file."""
@@ -331,7 +331,7 @@ class File:
         """
         Access an element within the file.
 
-        Creates an objPointer at the beginning of the file and uses its __getitem__ method.
+        Creates an objectProxy at the beginning of the file and uses its __getitem__ method.
         Supports various indexing operations for different data structures:
 
         Args:
@@ -343,9 +343,9 @@ class File:
                 - Tuple of indices/slices/lists (for multi-dimensional arrays)
 
         Returns:
-            For lists: An objPointer pointing to the found object (for integer indices)
+            For lists: An objectProxy pointing to the found object (for integer indices)
                       or a Python list (for slices)
-            For dictionaries: An objPointer pointing to the found object
+            For dictionaries: An objectProxy pointing to the found object
             For arrays: The actual array data (NumPy array) or scalar value
 
         Raises:
@@ -355,7 +355,7 @@ class File:
             IOError: If the file is not open for reading or not in read mode
         """
         self._check_open_for_reading()
-        # Use the objPointer's __getitem__ method
+        # Use the objectProxy's __getitem__ method
         return self.root[key]
 
     def read_debug(self, indent_size: int = 2, max_indent_level: int = 10, max_binary_bytes: int = 15) -> Iterator[str]:
@@ -415,7 +415,7 @@ class File:
 
     def __iter__(self):
         """
-        Enable iteration over a File object by delegating to objPointer.__iter__.
+        Enable iteration over a File object by delegating to objectProxy.__iter__.
 
         Returns:
             iterator: An iterator over the elements in the file
@@ -430,7 +430,7 @@ class File:
         if self.mode not in 'ra':
             raise IOError("File is not open in read mode")
 
-        # Delegate to the objPointer's __iter__ method
+        # Delegate to the objectProxy's __iter__ method
         return iter(self.root)
 
 class XTypeFileWriter:
@@ -463,14 +463,14 @@ class XTypeFileWriter:
         np.dtype('float64'): 'd'  # 64-bit double-precision float
     }
 
-    def __init__(self, file: BinaryIO, byteorder: str = 'auto'):
+    def __init__(self, xtFile: File, byteorder: str = 'auto'):
         """
         Initialize an XTypeFileWriter object.
 
         Args:
             file: The file object to write to
         """
-        self.file = file
+        self.file = xtFile.file
         self.byteorder = byteorder if byteorder != 'auto' else sys.byteorder
         self.need_byteswap = self.byteorder != sys.byteorder
         self.struct_byteorder = {'little': '<', 'big': '>'}[self.byteorder]
@@ -813,14 +813,15 @@ class XTypeFileReader:
         'd': np.float64    # 64-bit double-precision float
     }
 
-    def __init__(self, file: BinaryIO, byteorder: str = 'auto'):
+    def __init__(self, xtFile: File, byteorder: str = 'auto'):
         """
         Initialize an XTypeFileReader object.
 
         Args:
             file: The file object to read from
         """
-        self.file = file
+        self.xtFile = xtFile
+        self.file = xtFile.file
         self._pending_binary_size = 0
         self._pending_binary_type = None
         self.need_byteswap = False
@@ -883,7 +884,7 @@ class XTypeFileReader:
 
         # Reset the file position to the beginning
         self.file.seek(pos)
-        self.file._pending_binary_size = 0
+        self._pending_binary_size = 0
 
         # Start recursive parsing
         data = self._read_object()
@@ -1155,7 +1156,7 @@ class XTypeFileReader:
             if symbol == '*':
                 # This is a footnote marker
                 # Read the footnote content that follows the marker
-                footnote = objPointer(self.file, self, None, onlyContent=True)
+                footnote = objectProxy(self.xtFile, onlyContent=True)
                 footnotes.append(footnote)
             else:
                 # This is not a footnote, so we're done
@@ -1588,7 +1589,7 @@ class XTypeFileReader:
             return False
 
 
-class objPointer:
+class objectProxy:
     """
     A class that represents an object of the xtype format with a pointer to a specific position in the file.
 
@@ -1598,23 +1599,23 @@ class objPointer:
 
     fileEnd, listEnd, dictEnd = [(i,) for i in ('',']','}')]
 
-    def __init__(self, file: 'File', reader: Optional[XTypeFileReader], writer: Optional[XTypeFileWriter], position: int = -1, onlyContent: bool = False):
+    def __init__(self, xtFile: File, position: int = -1, onlyContent: bool = False):
         """
-        Initialize an objPointer.
+        Initialize an objectProxy.
 
         Args:
             file: The xtype.File object
             position: The position in the file where the object starts
         """
-        self.file = file
-        self.reader = reader
-        self.writer = writer
+        self.xtFile = xtFile
+        self.reader = xtFile.reader
+        self.writer = xtFile.writer
 
         if position < 0:
-            self.position = self.file.tell()
+            self.position = self.xtFile.file.tell()
         else:
             # Move file pointer to the specified position
-            self.file.seek(position)
+            self.xtFile.file.seek(position)
             self.position = position
 
         if onlyContent:
@@ -1757,24 +1758,24 @@ class objPointer:
 
     def _get_item_value(self) -> Any:
         """
-        Determine whether to return an objPointer or a primitive value.
+        Determine whether to return an objectProxy or a primitive value.
 
         This helper method reads the next object header and decides based on the type:
-        - For containers (lists, dictionaries) and arrays: returns an objPointer
+        - For containers (lists, dictionaries) and arrays: returns an objectProxy
         - For primitive types: reads and returns the actual object value directly
 
         Returns:
-            Either an objPointer instance or a primitive value depending on the object type
+            Either an objectProxy instance or a primitive value depending on the object type
         """
 
-        obj = objPointer(self.file, self.reader, self.writer)
+        obj = objectProxy(self.xtFile)
 
         # Peek at the next object information to determine its type
         # symbol, size, shape, footnotes = object_header = self.reader._read_header()
 
-        # Determine whether to return an objPointer or the actual value
+        # Determine whether to return an objectProxy or the actual value
         if obj.symbol in '[{' or (obj.shape and (len(obj.shape) > 1 or obj.symbol not in 'sxu')):
-            # Container type or array - return objPointer
+            # Container type or array - return objectProxy
             return obj
         else:
             # Primitive type - read and return directly
@@ -1834,9 +1835,9 @@ class objPointer:
                 - Tuple of indices/slices/lists (for multi-dimensional arrays)
 
         Returns:
-            For lists: An objPointer pointing to the found object (for integer indices)
+            For lists: An objectProxy pointing to the found object (for integer indices)
                       or a Python list (for slices)
-            For dictionaries: An objPointer pointing to the found object
+            For dictionaries: An objectProxy pointing to the found object
             For arrays: The actual array data (NumPy array) or scalar value
 
         Raises:
@@ -1866,7 +1867,7 @@ class objPointer:
                         raise IndexError(f"List index {item} out of range, list has only {index} elements")
                     index += 1
 
-                # Get the appropriate return value (objPointer or primitive)
+                # Get the appropriate return value (objectProxy or primitive)
                 return self._get_item_value()
 
             elif isinstance(item, slice):
@@ -1903,7 +1904,7 @@ class objPointer:
                     if next_symbol == ']':
                         break
 
-                    # Read the object directly without creating a new objPointer
+                    # Read the object directly without creating a new objectProxy
                     value = self.reader._read_object()
                     if type(value) is not tuple:
                         result.append(value)
@@ -1943,7 +1944,7 @@ class objPointer:
                     key = self.reader._convert_to_deep_tuple(key)
 
                 if key == item:
-                    # Key found, get the appropriate return value (objPointer or primitive)
+                    # Key found, get the appropriate return value (objectProxy or primitive)
                     return self._get_item_value()
                 else:
                     # Key doesn't match, skip the value and continue to next key-value pair
@@ -1951,7 +1952,7 @@ class objPointer:
 
         elif self.shape and (len(self.shape) > 1 or self.symbol not in 'sxu'):
             # Get the current file position as the data start position
-            data_start_pos = self.file.tell()  # Position where the actual array data begins
+            data_start_pos = self.xtFile.file.tell()  # Position where the actual array data begins
             # Call the helper method for array handling to prepare variables
             dtype, index_arrays, result_shape, chunk_size, strides, element_size = \
                     self._handle_array_indexing(item)
@@ -1969,8 +1970,8 @@ class objPointer:
                           for idx, stride in zip(indices, strides))
 
                 # Seek to the position of this element and read the data
-                self.file.seek(data_start_pos + offset)
-                element_bytes = self.file.read(chunk_size)
+                self.xtFile.file.seek(data_start_pos + offset)
+                element_bytes = self.xtFile.file.read(chunk_size)
 
                 # Ensure we read the expected number of bytes - this could fail at EOF or with corrupted files
                 assert len(element_bytes) == chunk_size
@@ -2029,7 +2030,7 @@ class objPointer:
             raise TypeError(f"Object of type '{self.symbol}' does not support item assignment")
 
         # Get the current file position as the data start position
-        data_start_pos = self.file.tell()  # Position where the actual array data begins
+        data_start_pos = self.xtFile.file.tell()  # Position where the actual array data begins
 
         # Call the helper method for array handling to prepare variables
         dtype, index_arrays, result_shape, chunk_size, strides, element_size = \
@@ -2086,7 +2087,7 @@ class objPointer:
                       for idx, stride in zip(indices, strides))
 
             # Seek to the position of this element
-            self.file.seek(data_start_pos + offset)
+            self.xtFile.file.seek(data_start_pos + offset)
 
             # Handle writing based on chunk size
             if use_chunks:
@@ -2132,11 +2133,11 @@ class objPointer:
                     raise ValueError("No values to assign")
 
             # Write the data
-            self.file.write(binary_value)
+            self.xtFile.file.write(binary_value)
 
     def __iter__(self):
         """
-        Enable iteration over an objPointer that points to a list.
+        Enable iteration over an objectProxy that points to a list.
 
         Returns:
             self: This instance as an iterator
@@ -2177,7 +2178,7 @@ class objPointer:
             raise StopIteration
 
         # Otherwise, read the object and increment index
-        value = objPointer(self.file, self.reader, self.writer)()
+        value = objectProxy(self.xtFile)()
         self._iter_index += 1
 
         # If we're at the end of the list, stop iteration
@@ -2190,13 +2191,13 @@ class objPointer:
 
     def __repr__(self) -> str:
         """
-        Return a string representation of the objPointer.
+        Return a string representation of the objectProxy.
 
         For arrays, includes shape information.
         For other types, shows the type symbol.
 
         Returns:
-            str: A string representation of the objPointer
+            str: A string representation of the objectProxy
         """
         # Type mapping for more readable output
         type_names = {
@@ -2215,9 +2216,9 @@ class objPointer:
 
         # For arrays (has shape and not a string/bytes type with only 1 dimension)
         if self.shape and (len(self.shape) > 1 or self.symbol not in 'sxu'):
-            return f"<objPointer type='{type_name}' shape={self.shape}>"
+            return f"<objectProxy type='{type_name}' shape={self.shape}>"
         else:
-            return f"<objPointer type='{type_name}'>"
+            return f"<objectProxy type='{type_name}'>"
 
 
     def _handle_array_indexing(self, item: Union[int, slice, List[int], np.ndarray, Tuple]) -> Tuple[np.dtype, List, List[int], int, List[int], int]:
