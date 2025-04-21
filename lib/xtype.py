@@ -50,14 +50,14 @@ import itertools
 # <bin_data> represents the actual binary data of the specified size for the given type.
 # <EOF> marks the end of file. In streaming applications, this could be represented by a zero byte.
 
-class _ContainerProxy:
-    """Internal base class for write‑mode container proxies (lists & dicts)."""
-
+class ContainerProxy:
+    """Abstract base class for all xtype proxies (container, array, etc). Internal base class for container proxies (lists & dicts)."""
     def __init__(self, xtFile, parent, opening_char: bytes, closing_char: bytes):
-        self.xtFile = xtFile          # xtype.File instance
-        self.parent = parent          # The parent proxy or ``None`` (for root)
-        self._closed = False          # Flag to prevent further writes after closing
+        self.xtFile = xtFile
+        self.parent = parent
+        self._closed = False  # For containers, True if closed
         self._closing_char = closing_char  # Byte used to close the container
+        # For arrays: additional metadata (shape, dtype, etc) can be set by subclass
 
         # Basic safety checks – refuse to operate on a closed/non‑writable file
         if getattr(self.xtFile, "file", None) is None or getattr(self.xtFile, "writer", None) is None:
@@ -69,14 +69,11 @@ class _ContainerProxy:
             self.xtFile.writer.flush()
 
     # ------------------------------------------------------------------
-    # Helper used by *both* ListProxy.add() and DictProxy.__setitem__()
+    # Helper used by both ListProxy.add() and DictProxy.__setitem__()
     # ------------------------------------------------------------------
     def _handle_value(self, value):
         """Write *value* (or open a nested container) and return nested proxy if any."""
-        # Close any inner containers so we always append to / write inside *this* container
         self.xtFile._close_to(self)
-
-        # Delegated handling of nested containers / primitives -----------------
         if isinstance(value, dict):
             proxy = DictProxy(self.xtFile, parent=self)
             self.xtFile._open_containers.append(proxy)
@@ -90,18 +87,15 @@ class _ContainerProxy:
             self.xtFile.writer.flush()
             return proxy
         else:
-            # Primitive: let the writer serialise it directly
             self.xtFile.writer._write_object(value)
             self.xtFile.writer.flush()
             self.xtFile.last = self
             return None
 
-    # ------------------------------------------------------------------
     def _ensure_not_closed(self, container_name: str):
         if self._closed:
             raise RuntimeError(f"Cannot write to closed {container_name}.")
 
-    # ------------------------------------------------------------------
     def _close(self):
         """Write the container's closing token if not already closed."""
         if not self._closed:
@@ -109,36 +103,30 @@ class _ContainerProxy:
             self.xtFile.writer.flush()
             self._closed = True
 
-class ListProxy(_ContainerProxy):
+class ListProxy(ContainerProxy):
     def __init__(self, xtFile, parent):
         # '[' opens list, ']' closes
         super().__init__(xtFile, parent, b'[', b']')
 
-    # ------------------------------------------------------------------
     def add(self, value):
         """Append *value* to the list, returning a proxy for nested containers."""
         self._ensure_not_closed("list")
         return self._handle_value(value)
 
-    # List does not support key assignment
     def __setitem__(self, key, value):
         raise TypeError("Cannot use __setitem__ on a list container. Use add().")
 
 
-class DictProxy(_ContainerProxy):
+class DictProxy(ContainerProxy):
     def __init__(self, xtFile, parent):
         # '{' opens dict, '}' closes
         super().__init__(xtFile, parent, b'{', b'}')
 
-    # ------------------------------------------------------------------
     def __setitem__(self, key, value):
         self._ensure_not_closed("dict")
-        # Write the key first (always as xtype primitive)
         self.xtFile.writer._write_object(key)
-        # Delegate writing / nested‑proxy creation to the shared helper
         return self._handle_value(value)
 
-    # Dicts purposefully disallow list‑style ``add``
     def add(self, value):
         raise TypeError("Cannot use add() on a dict container. Use __setitem__().")
 
@@ -240,7 +228,7 @@ class File:
         else:
             raise ValueError(f"Unsupported mode: {self.mode}")
         if self.mode in 'ra':
-            self.root = objectProxy(self, 0)
+            self.root = ObjectProxy(self, 0)
 
     def close(self):
         """Close the file."""
@@ -328,7 +316,7 @@ class File:
         """
         Access an element within the file.
 
-        Creates an objectProxy at the beginning of the file and uses its __getitem__ method.
+        Creates an ObjectProxy at the beginning of the file and uses its __getitem__ method.
         Supports various indexing operations for different data structures:
 
         Args:
@@ -340,9 +328,9 @@ class File:
                 - Tuple of indices/slices/lists (for multi-dimensional arrays)
 
         Returns:
-            For lists: An objectProxy pointing to the found object (for integer indices)
+            For lists: An ObjectProxy pointing to the found object (for integer indices)
                       or a Python list (for slices)
-            For dictionaries: An objectProxy pointing to the found object
+            For dictionaries: An ObjectProxy pointing to the found object
             For arrays: The actual array data (NumPy array) or scalar value
 
         Raises:
@@ -352,7 +340,7 @@ class File:
             IOError: If the file is not open for reading or not in read mode
         """
         self._check_open_for_reading()
-        # Use the objectProxy's __getitem__ method
+        # Use the ObjectProxy's __getitem__ method
         return self.root[key]
 
     def read_debug(self, indent_size: int = 2, max_indent_level: int = 10, max_binary_bytes: int = 15) -> Iterator[str]:
@@ -412,7 +400,7 @@ class File:
 
     def __iter__(self):
         """
-        Enable iteration over a File object by delegating to objectProxy.__iter__.
+        Enable iteration over a File object by delegating to ObjectProxy.__iter__.
 
         Returns:
             iterator: An iterator over the elements in the file
@@ -427,7 +415,7 @@ class File:
         if self.mode not in 'ra':
             raise IOError("File is not open in read mode")
 
-        # Delegate to the objectProxy's __iter__ method
+        # Delegate to the ObjectProxy's __iter__ method
         return iter(self.root)
 
 class XTypeFileWriter:
@@ -1153,7 +1141,7 @@ class XTypeFileReader:
             if symbol == '*':
                 # This is a footnote marker
                 # Read the footnote content that follows the marker
-                footnote = objectProxy(self.xtFile, onlyContent=True)
+                footnote = ObjectProxy(self.xtFile, onlyContent=True)
                 footnotes.append(footnote)
             else:
                 # This is not a footnote, so we're done
@@ -1585,8 +1573,7 @@ class XTypeFileReader:
             self.need_byteswap = False
             return False
 
-
-class objectProxy:
+class ObjectProxy:
     """
     A class that represents an object of the xtype format with a pointer to a specific position in the file.
 
@@ -1598,15 +1585,15 @@ class objectProxy:
 
     def __init__(self, xtFile: File, position: int = -1, onlyContent: bool = False):
         """
-        Initialize an objectProxy.
+        Initialize an ObjectProxy.
 
         Args:
             file: The xtype.File object
             position: The position in the file where the object starts
         """
-        self.xtFile = xtFile
-        self.reader = xtFile.reader
-        self.writer = xtFile.writer
+        self.xtFile: File = xtFile
+        self.reader: XTypeFileReader = xtFile.reader
+        self.writer: XTypeFileWriter = xtFile.writer
 
         if position < 0:
             self.position = self.xtFile.file.tell()
@@ -1755,24 +1742,24 @@ class objectProxy:
 
     def _get_item_value(self) -> Any:
         """
-        Determine whether to return an objectProxy or a primitive value.
+        Determine whether to return an ObjectProxy or a primitive value.
 
         This helper method reads the next object header and decides based on the type:
-        - For containers (lists, dictionaries) and arrays: returns an objectProxy
+        - For containers (lists, dictionaries) and arrays: returns an ObjectProxy
         - For primitive types: reads and returns the actual object value directly
 
         Returns:
-            Either an objectProxy instance or a primitive value depending on the object type
+            Either an ObjectProxy instance or a primitive value depending on the object type
         """
 
-        obj = objectProxy(self.xtFile)
+        obj = ObjectProxy(self.xtFile)
 
         # Peek at the next object information to determine its type
         # symbol, size, shape, footnotes = object_header = self.reader._read_header()
 
-        # Determine whether to return an objectProxy or the actual value
+        # Determine whether to return an ObjectProxy or the actual value
         if obj.symbol in '[{' or (obj.shape and (len(obj.shape) > 1 or obj.symbol not in 'sxu')):
-            # Container type or array - return objectProxy
+            # Container type or array - return ObjectProxy
             return obj
         else:
             # Primitive type - read and return directly
@@ -1832,9 +1819,9 @@ class objectProxy:
                 - Tuple of indices/slices/lists (for multi-dimensional arrays)
 
         Returns:
-            For lists: An objectProxy pointing to the found object (for integer indices)
+            For lists: An ObjectProxy pointing to the found object (for integer indices)
                       or a Python list (for slices)
-            For dictionaries: An objectProxy pointing to the found object
+            For dictionaries: An ObjectProxy pointing to the found object
             For arrays: The actual array data (NumPy array) or scalar value
 
         Raises:
@@ -1864,7 +1851,7 @@ class objectProxy:
                         raise IndexError(f"List index {item} out of range, list has only {index} elements")
                     index += 1
 
-                # Get the appropriate return value (objectProxy or primitive)
+                # Get the appropriate return value (ObjectProxy or primitive)
                 return self._get_item_value()
 
             elif isinstance(item, slice):
@@ -1901,7 +1888,7 @@ class objectProxy:
                     if next_symbol == ']':
                         break
 
-                    # Read the object directly without creating a new objectProxy
+                    # Read the object directly without creating a new ObjectProxy
                     value = self.reader._read_object()
                     if type(value) is not tuple:
                         result.append(value)
@@ -1941,7 +1928,7 @@ class objectProxy:
                     key = self.reader._convert_to_deep_tuple(key)
 
                 if key == item:
-                    # Key found, get the appropriate return value (objectProxy or primitive)
+                    # Key found, get the appropriate return value (ObjectProxy or primitive)
                     return self._get_item_value()
                 else:
                     # Key doesn't match, skip the value and continue to next key-value pair
@@ -2134,7 +2121,7 @@ class objectProxy:
 
     def __iter__(self):
         """
-        Enable iteration over an objectProxy that points to a list.
+        Enable iteration over an ObjectProxy that points to a list.
 
         Returns:
             self: This instance as an iterator
@@ -2175,7 +2162,7 @@ class objectProxy:
             raise StopIteration
 
         # Otherwise, read the object and increment index
-        value = objectProxy(self.xtFile)()
+        value = ObjectProxy(self.xtFile)()
         self._iter_index += 1
 
         # If we're at the end of the list, stop iteration
@@ -2188,13 +2175,13 @@ class objectProxy:
 
     def __repr__(self) -> str:
         """
-        Return a string representation of the objectProxy.
+        Return a string representation of the ObjectProxy.
 
         For arrays, includes shape information.
         For other types, shows the type symbol.
 
         Returns:
-            str: A string representation of the objectProxy
+            str: A string representation of the ObjectProxy
         """
         # Type mapping for more readable output
         type_names = {
@@ -2213,9 +2200,9 @@ class objectProxy:
 
         # For arrays (has shape and not a string/bytes type with only 1 dimension)
         if self.shape and (len(self.shape) > 1 or self.symbol not in 'sxu'):
-            return f"<objectProxy type='{type_name}' shape={self.shape}>"
+            return f"<ObjectProxy type='{type_name}' shape={self.shape}>"
         else:
-            return f"<objectProxy type='{type_name}'>"
+            return f"<ObjectProxy type='{type_name}'>"
 
 
     def _handle_array_indexing(self, item: Union[int, slice, List[int], np.ndarray, Tuple]) -> Tuple[np.dtype, List, List[int], int, List[int], int]:
