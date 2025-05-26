@@ -5,6 +5,14 @@
 
 xtype is a Python library for serializing and deserializing data structures using the [xtype](https://github.com/bitagoras/xtype) binary format for efficient data exchange and storage.
 
+## Installation
+
+To install xtype locally, run:
+
+```sh
+pip install .
+```
+
 ## Features
 
 - **Compact Binary Format**: Efficiently serialize data with minimal overhead
