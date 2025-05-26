@@ -19,7 +19,7 @@ License: MIT
 Project: https://github.com/bitagoras/xtype-python
 """
 
-__version__ = "0.5.0"
+__version__ = "0.5.1"
 
 import struct
 import numpy as np
@@ -51,6 +51,7 @@ import itertools
 # <EOF> marks the end of file. In streaming applications, this could be represented by a zero byte.
 
 class ContainerProxy:
+    "just a test"
     """Abstract base class for all xtype proxies (container, array, etc). Internal base class for container proxies (lists & dicts)."""
     def __init__(self, xtFile, parent, opening_char: bytes, closing_char: bytes):
         self.xtFile = xtFile
@@ -1521,8 +1522,8 @@ class XTypeFileReader:
         if not self.file or self.file.closed:
             raise IOError("File is not open for reading")
 
-        if self._pending_binary_size <= 0:
-            raise ValueError("No pending binary data to read. Call _read_raw() first.")
+        if self._pending_binary_size == 0:
+            return b''
 
         # Determine how many bytes to read
         bytes_to_read = self._pending_binary_size

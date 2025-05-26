@@ -37,6 +37,7 @@ def test_primitive_types(temp_file):
         "boolean_false": False,
         "none_value": None,
         "string": "Hello, world!",
+        "empty_string": "",
         "bytes": b"Binary data"
     }
 
@@ -61,6 +62,7 @@ def test_primitive_types(temp_file):
         assert xf["boolean_false"] is False
         assert xf["none_value"] is None
         assert xf["string"] == "Hello, world!"
+        assert xf["empty_string"] == ""
         assert xf["bytes"] == b"Binary data"
 
 def test_container_types(temp_file):
